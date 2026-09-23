@@ -1,0 +1,166 @@
+:root{
+  --bg:#F5F5F2; --card:#FFFFFF; --ink:#2C2C2A; --ink2:#5F5E5A; --ink3:#888780;
+  --line:#E3E1D9; --accent:#185FA5; --accent-soft:#E6F1FB; --warn:#FAEEDA;
+  --warn-line:#FAC775; --ok:#E1F5EE; --ok-line:#9FE1CB;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;font-size:14px;line-height:1.6}
+.top{display:flex;align-items:baseline;gap:14px;padding:16px 24px;background:var(--card);
+  border-bottom:1px solid var(--line)}
+.brand{font-size:17px;font-weight:500}
+.sub{color:var(--ink2);font-size:12px}
+.grid{display:grid;grid-template-columns:300px minmax(0,1fr) 360px;gap:16px;padding:16px 24px}
+@media (max-width:1200px){.grid{grid-template-columns:1fr}}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.panel h3{margin:0 0 12px;font-size:14px;font-weight:500;color:var(--ink)}
+h3::before{content:"";display:inline-block;width:3px;height:13px;background:var(--accent);
+  margin-right:8px;vertical-align:-1px;border-radius:2px}
+.drop{border:1.5px dashed var(--line);border-radius:10px;padding:18px 12px;text-align:center;
+  cursor:pointer;transition:.15s;background:#FAFAF8}
+.drop:hover,.drop.over{border-color:var(--accent);background:var(--accent-soft)}
+.drop-title{font-size:14px}
+.drop-sub{font-size:12px;color:var(--ink3)}
+.paste-box{margin-top:10px}
+textarea,input.txt,select,input.num{width:100%;padding:6px 8px;border:1px solid var(--line);
+  border-radius:8px;font-family:inherit;font-size:13px;background:#fff;color:var(--ink)}
+textarea{resize:vertical}
+input.num{width:72px}
+.btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 12px;
+  cursor:pointer;font-family:inherit;font-size:13px;color:var(--ink)}
+.btn:hover{border-color:var(--ink3)}
+.btn.sm{padding:4px 9px;font-size:12px}
+.btn.ghost{background:#fff}
+.btn.primary{background:var(--accent);color:#fff;border-color:var(--accent);width:100%;
+  margin-top:12px;padding:9px}
+.btn.primary:disabled{background:var(--ink3);border-color:var(--ink3);cursor:not-allowed}
+.filelist{margin-top:12px;display:flex;flex-direction:column;gap:6px}
+.fitem{display:flex;align-items:center;gap:8px;font-size:12px;padding:7px 9px;
+  border:1px solid var(--line);border-radius:8px;background:#FAFAF8}
+.fitem .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex:none}
+.fitem .dot.err{background:#E24B4A}
+.fitem .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.row{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.row label{font-size:12px;color:var(--ink2);flex:none;min-width:52px}
+.hint{font-size:12px;color:var(--ink3)}
+.empty{color:var(--ink3);font-size:13px;padding:24px 0;text-align:center}
+.types{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.tchip{display:flex;align-items:center;gap:5px;font-size:12px;border:1px solid var(--line);
+  border-radius:20px;padding:3px 6px 3px 10px;background:#FAFAF8}
+.tchip select{border:none;background:transparent;font-size:12px;padding:2px;color:var(--accent)}
+.warns{margin-bottom:10px}
+.warns div{background:var(--warn);border:1px solid var(--warn-line);color:#633806;
+  font-size:12px;padding:7px 10px;border-radius:8px;margin-bottom:5px}
+.tablewrap{max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;font-size:12px}
+th,td{border-bottom:1px solid var(--line);padding:6px 9px;text-align:left;white-space:nowrap}
+th{background:#F1EFE8;position:sticky;top:0;font-weight:500;color:#444441}
+.chart-card{border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px;
+  background:#FAFAF8}
+.chart-card .hd{display:flex;justify-content:space-between;align-items:center;
+  margin-bottom:8px;font-size:12px;color:var(--ink2)}
+.chart-card .hd .x{cursor:pointer;color:var(--ink3);padding:0 4px}
+.chart-card .row{margin-bottom:7px}
+.chart-card .row label{min-width:44px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid var(--line);border-radius:16px;padding:2px 10px;font-size:12px;
+  cursor:pointer;background:#fff;color:var(--ink2)}
+.chip.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.msg{font-size:12px;margin-top:8px;color:var(--ink2)}
+.msg.err{color:#A32D2D}
+.preview{margin:0 24px 24px}
+.preview iframe{width:100%;height:640px;border:1px solid var(--line);border-radius:10px;
+  background:#fff;margin-top:10px}
+
+/* —— 后续新增：文件夹导入、合并建议、导出按钮组 —— */
+.flag{margin-left:auto;font-size:12px;padding:4px 10px;border-radius:999px;
+ background:#F1EFE8;color:#5F5E5A;white-space:nowrap}
+.flag.on{background:#E1F5EE;color:#0F6E56}
+.flag.off{background:#FAEEDA;color:#854F0B}
+.btns-row{display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap}
+.btns-row .hint{margin:0}
+.fitem .dot.warn{background:#EF9F27}
+.fitem .src{font-size:11px;color:#888780;margin-left:6px}
+.fitem.off{opacity:.45;text-decoration:line-through}
+.fitem .rm{margin-left:auto;cursor:pointer;color:#888780;font-size:14px;padding:0 2px}
+.fitem .rm:hover{color:#A32D2D}
+.types{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.tchip select{font-size:12px}
+.row.disabled{opacity:.5;pointer-events:none}
+#mergeGroups{margin-top:8px;line-height:1.6}
+.gtag{display:inline-block;background:#E6F1FB;border:1px solid #B5D4F4;color:#0C447C;
+ border-radius:6px;padding:2px 8px;margin:2px 4px 2px 0;font-size:12px}
+.nl-box{display:flex;gap:6px;margin:10px 0 4px}
+.nl-box .txt{flex:1}
+.preview .row{flex-wrap:wrap;gap:6px}
+
+/* —— 历史报告列表 —— */
+.histlist{margin-top:8px}
+.hitem{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+ padding:6px 0;border-bottom:1px solid var(--line,#E5E3DC)}
+.hitem:last-child{border-bottom:none}
+.hitem .hnm{font-size:13px;font-weight:500;min-width:180px}
+.hitem a.gtag{text-decoration:none}
+
+/* —— 数据库取数面板（只读） —— */
+#dbDetails > summary.db-sum{cursor:pointer;font-size:12px;color:var(--accent);margin-bottom:10px;
+  list-style:revert}
+#dbDetails[open] > summary.db-sum{margin-bottom:12px}
+.db-note{background:var(--ok);border:1px solid var(--ok-line);color:#0F6E56;font-size:12px;
+  padding:7px 10px;border-radius:8px;margin-bottom:10px;line-height:1.55}
+.db-note code{background:#fff;border:1px solid var(--ok-line);border-radius:4px;
+  padding:0 4px;font-size:11px;font-family:Consolas,"Courier New",monospace}
+.db-sql-row{margin-top:12px}
+#dbSql{font-family:Consolas,"Courier New",monospace;font-size:12px;line-height:1.5}
+#dbFields .row{margin-bottom:8px}
+#dbTables{margin-top:10px;max-height:230px;overflow:auto}
+#dbTables .fitem{cursor:pointer}
+#dbTables .fitem:hover{border-color:var(--accent)}
+#dbResult .tablewrap{margin-top:10px;max-height:260px}
+.db-col{font-size:11px;color:var(--ink3);margin-top:6px;line-height:1.7}
+.db-col b{color:var(--ink2);font-weight:500}
+
+/* ---------- 数据看板面板 ---------- */
+#dashList{width:100%;display:block}
+#dashList .fitem{cursor:default}
+#dashList .fitem .src{flex:none}
+#dashList .fitem .btn{margin-left:0;flex:none}
+#dashList .fitem .btn:first-of-type{margin-left:auto}
+#dashName{min-width:220px}
+
+/* ---------- 报告 / 看板 视图切换（同一块地方，不再开两个窗口） ---------- */
+.viewbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.viewtabs{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.vtab{font:inherit;font-size:13px;padding:6px 20px;cursor:pointer;border:0;
+  background:#fff;color:var(--ink2);transition:.15s}
+.vtab:hover{color:var(--accent)}
+.vtab.on{background:var(--accent);color:#fff}
+.vtab+.vtab{border-left:1px solid var(--line)}
+.vacts{display:flex;gap:6px;flex-wrap:wrap}
+.c-split-wrap .hint{font-size:11px;color:var(--ink3)}
+
+/* ---------- 行内布局修复 ----------
+   select 在全局规则里带 width:100%，跟同一行的按钮抢空间，
+   结果「移除这张」「应用」被挤到换行，「保存到看板」甚至竖排成
+   「保 / 存 / 到 / 看 / 板」。这里明确分工：输入类控件吃掉剩余宽度，
+   按钮和说明保持自身尺寸、永不折行。 */
+.row > select{flex:1 1 auto;min-width:0}
+.row > .btn,.row > button{flex:none;white-space:nowrap}
+.btn.primary.sm{width:auto}
+
+/* 类型标签：列名被压成竖排（销 / 售 / 额）就是这个引起的 */
+.tchip{flex:none;white-space:nowrap}
+.tchip select{width:auto;flex:none}
+
+/* 列表项里的按钮同样不折行 */
+.hitem .btn,.fitem .btn,#dashList .btn{flex:none;white-space:nowrap}
+
+/* 看板列表：名称给足宽度，按钮固定在右侧，别让日期把按钮顶下去 */
+#dashList .fitem{gap:10px}
+#dashList .fitem .nm{flex:1 1 auto;min-width:0}
+#dashList .fitem .btn{margin-left:0}
+
+/* 右栏偏窄，类型标签、预览按钮都挤在这里，给它多一点宽度 */
+@media (min-width:1200px){
+  .grid{grid-template-columns:300px minmax(0,1fr) 384px}
+}
