@@ -1,0 +1,23 @@
+# 换行符统一规则
+#
+# 为什么要写这个文件：Windows 的 cmd.exe 解析批处理时，如果文件是 LF-only 换行，
+# `goto 标签` 会跳错位置 —— 本项目的 启动.bat / 安装依赖.bat 重度依赖 goto，
+# 必须保证取出来是 CRLF。不加这条规则的话，clone 下来的 .bat 会是 LF，双击就出问题。
+
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制：别做任何换行转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.xlsx binary
+*.xls binary
+*.docx binary
+*.pdf binary
+*.db binary
+*.zip binary

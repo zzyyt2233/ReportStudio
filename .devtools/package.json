@@ -1,0 +1,6 @@
+{
+  "name": "reportstudio-devtools",
+  "private": true,
+  "description": "仅开发/测试用的依赖（前端逻辑回归需要 jsdom）。放在 E 盘，不进生产路径。",
+  "dependencies": { "jsdom": "^24.0.0" }
+}

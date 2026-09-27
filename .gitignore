@@ -1,0 +1,69 @@
+# ============================================================
+# ReportStudio · 哪些东西绝不入库
+# 原则：只提交「代码」，不提交「数据」和「密钥」。
+# 别人 clone 下来后，跑 启动.bat 会自动补依赖，产物落在自己机器上。
+# ============================================================
+
+# ---- 依赖与虚拟环境（对方自己装，293MB）----
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ---- 运行产物：报告、图表、导出文件（821MB，且含真实业务数据）----
+outputs/
+temp/
+logs/
+*.log
+service.log
+
+# 清理守卫把待删的会话文件改名成 *.json.<pid>.<ts> 后堆在这里（893 个，7MB）
+# 那是用户数据的残片，绝不上传
+session_trash/
+
+# 前端测试用的 jsdom（14MB）。保留 package.json / package-lock.json，
+# 别人 npm install 就能还原，node_modules 本身不进仓库。
+.devtools/node_modules/
+
+# ---- 用户数据：上传的原始文件、会话快照、看板配置 ----
+session/
+dashboards/
+
+# ---- 密钥类：绝不允许提交 ----
+# db_connections.json 里是数据库地址 + 用户名 + 明文密码
+db_connections.json
+config.local.yaml
+.env
+.env.*
+*.key
+
+# 注意：config.yaml 是「公共模板」，可以进仓库；密钥与私人设置请写 config.local.yaml，
+# 它已经在上面被忽略，所以把项目分享给别人时不会连着密钥一起发出去。
+# core/config.py 的读取顺序是 config.yaml → config.local.yaml，后者覆盖前者。
+
+# ---- 打包产物 ----
+build/
+dist/
+*.exe
+*.dmg
+*.AppImage
+
+# ---- 编辑器与系统 ----
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 清理守卫留下的重命名残留（*.deleted / *.DELETE.<hex>）----
+*.deleted
+*.DELETE.*
+
+# ---- samples/ 里除生成器外都是「生成物」，不入库 ----
+# 别人 clone 后跑一次：python samples/make_samples.py
+# 这样仓库保持纯文本，不会因为几 MB 的 xlsx/docx/pdf/db 把仓库撑大
+samples/*
+!samples/make_samples.py

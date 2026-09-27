@@ -1,0 +1,241 @@
+:root{
+  --bg:#F5F5F2; --card:#FFFFFF; --ink:#2C2C2A; --ink2:#5F5E5A; --ink3:#888780;
+  --line:#E3E1D9; --accent:#185FA5; --accent-soft:#E6F1FB; --warn:#FAEEDA;
+  --warn-line:#FAC775; --ok:#E1F5EE; --ok-line:#9FE1CB;
+}
+*{box-sizing:border-box}
+/* hidden 属性必须真的能藏住元素。
+   浏览器默认样式里的 [hidden]{display:none} 属于 **UA 样式表**，作者样式表里
+   任何一条 display 规则都会把它压掉（跟优先级无关，作者样式总是赢）。
+   本文件里 .row / .vacts / .c-ytypes 都写了 display，于是「设了 hidden 却照常显示」
+   —— 界面上表现为「该消失的控件还在」：报告页签下冒出看板按钮、
+   指标只剩一个时「多指标」那行还挂着、饼图那张卡还问你要不要双轴。
+   加这条 !important 一次兜住，以后新增任何带 display 的类都不会再踩。 */
+[hidden]{display:none !important}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;font-size:14px;line-height:1.6}
+.top{display:flex;align-items:baseline;gap:14px;padding:16px 24px;background:var(--card);
+  border-bottom:1px solid var(--line)}
+.brand{font-size:17px;font-weight:500}
+.sub{color:var(--ink2);font-size:12px}
+/* 三列各自独立堆叠：每列一个 .col 容器，列内 panel 依次排列。
+   不让 6 个 panel 直接当 grid item —— 那样同行会被拉齐到同一高度，
+   折叠起来只有几十像素高的面板（如第 2 节）会被硬撑出一大块空白。 */
+.grid{display:grid;grid-template-columns:300px minmax(0,1fr) 384px;
+  gap:16px;padding:16px 24px;align-items:start}
+.col{display:flex;flex-direction:column;gap:16px;min-width:0}
+/* 窄屏：列容器不生成盒子，panel 回到按 DOM 顺序单列排列。
+   列宽用 minmax(0,1fr) —— 纯 1fr 的最小尺寸等于内容宽度，
+   面板里一条 nowrap 的长文本就能把整列撑出视口。 */
+@media (max-width:1200px){
+  .grid{grid-template-columns:minmax(0,1fr)}
+  .col{display:contents}
+}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.panel h3{margin:0 0 12px;font-size:14px;font-weight:500;color:var(--ink)}
+h3::before{content:"";display:inline-block;width:3px;height:13px;background:var(--accent);
+  margin-right:8px;vertical-align:-1px;border-radius:2px}
+.drop{border:1.5px dashed var(--line);border-radius:10px;padding:18px 12px;text-align:center;
+  cursor:pointer;transition:.15s;background:#FAFAF8}
+.drop:hover,.drop.over{border-color:var(--accent);background:var(--accent-soft)}
+.drop-title{font-size:14px}
+.drop-sub{font-size:12px;color:var(--ink3)}
+.paste-box{margin-top:10px}
+textarea,input.txt,select,input.num{width:100%;padding:6px 8px;border:1px solid var(--line);
+  border-radius:8px;font-family:inherit;font-size:13px;background:#fff;color:var(--ink)}
+textarea{resize:vertical}
+input.num{width:72px}
+.btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 12px;
+  cursor:pointer;font-family:inherit;font-size:13px;color:var(--ink)}
+.btn:hover{border-color:var(--ink3)}
+.btn.sm{padding:4px 9px;font-size:12px}
+.btn.ghost{background:#fff}
+/* 清空数据这类的破坏性操作：红色描边，跟普通按钮区分开，别手滑点错 */
+.btn.danger{color:#A32D2D;border-color:#E8C4C4;background:#FDF6F6}
+.btn.danger:hover{border-color:#C97C7C;background:#FBEDED}
+.btn.primary{background:var(--accent);color:#fff;border-color:var(--accent);width:100%;
+  margin-top:12px;padding:9px}
+.btn.primary:disabled{background:var(--ink3);border-color:var(--ink3);cursor:not-allowed}
+.filelist{margin-top:12px;display:flex;flex-direction:column;gap:6px}
+.fitem{display:flex;align-items:center;gap:8px;font-size:12px;padding:7px 9px;
+  border:1px solid var(--line);border-radius:8px;background:#FAFAF8}
+.fitem .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex:none}
+.fitem .dot.err{background:#E24B4A}
+.fitem .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.row{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.row label{font-size:12px;color:var(--ink2);flex:none;min-width:52px}
+.hint{font-size:12px;color:var(--ink3)}
+.empty{color:var(--ink3);font-size:13px;padding:24px 0;text-align:center}
+.types{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.tchip{display:flex;align-items:center;gap:5px;font-size:12px;border:1px solid var(--line);
+  border-radius:20px;padding:3px 6px 3px 10px;background:#FAFAF8}
+.tchip select{border:none;background:transparent;font-size:12px;padding:2px;color:var(--accent)}
+.warns{margin-bottom:10px}
+.warns div{background:var(--warn);border:1px solid var(--warn-line);color:#633806;
+  font-size:12px;padding:7px 10px;border-radius:8px;margin-bottom:5px}
+.tablewrap{max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;font-size:12px}
+th,td{border-bottom:1px solid var(--line);padding:6px 9px;text-align:left;white-space:nowrap}
+th{background:#F1EFE8;position:sticky;top:0;font-weight:500;color:#444441}
+.chart-card{border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px;
+  background:#FAFAF8}
+.chart-card .hd{display:flex;justify-content:space-between;align-items:center;
+  margin-bottom:8px;font-size:12px;color:var(--ink2)}
+.chart-card .hd .x{cursor:pointer;color:var(--ink3);padding:0 4px}
+.chart-card .row{margin-bottom:7px}
+.chart-card .row label{min-width:44px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid var(--line);border-radius:16px;padding:2px 10px;font-size:12px;
+  cursor:pointer;background:#fff;color:var(--ink2)}
+.chip.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+/* —— 每个指标单独的图型 ——
+   对齐方式和卡片里其它行一致（label 列 min-width 44px），
+   这样「销售额 [折线图]」看起来就是普通的一行，而不是另画一块。 */
+.c-ytypes{margin:2px 0 8px 0;display:flex;flex-direction:column;gap:6px}
+/* 上面给了 display:flex，靠文件顶部的全局 [hidden]{display:none !important} 兜底 */
+.yt-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.yt-nm{font-size:12px;color:var(--ink2);flex:none;min-width:44px}
+.yt-row select{flex:none;width:auto;min-width:150px}
+.yt-row .hint{font-size:11px}
+/* 「类型」是短下拉，不该像「横轴」那样吃满整行 —— 吃满之后后面那句说明
+   会被顶到卡片最右边，跟它解释的控件隔了半个屏幕。 */
+.chart-card .row > select.c-type{flex:0 0 auto;width:auto;min-width:150px}
+.msg{font-size:12px;margin-top:8px;color:var(--ink2)}
+.msg.err{color:#A32D2D}
+.preview{margin:0 24px 24px}
+.preview iframe{width:100%;height:640px;border:1px solid var(--line);border-radius:10px;
+  background:#fff;margin-top:10px}
+/* 没有内容时不摆一个空框，换成一句说明 */
+.preview iframe.is-empty{display:none}
+/* 放大预览：预览框只有 640px 高，看板里「放大某一张图」的那个面板
+   在这么矮的视口里施展不开（弹层最高只有视口的 92%）。这里直接把
+   iframe 铺满整个浏览器窗口，弹层就有地方铺开了。
+   用 id 选择器是因为 .preview iframe 的 height 优先级更高。
+   宽高必须写成 calc 而不是靠 inset 拉伸：iframe 是**替换元素**，
+   对它来说 width:auto 的意思是「用内在尺寸」（300×150），不是「撑满」——
+   只写 inset 的话它会缩在左上角变成一小块。 */
+#frame.zoomed{position:fixed;top:14px;left:14px;z-index:70;
+  width:calc(100vw - 28px);height:calc(100vh - 28px);
+  margin:0;border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,.3)}
+.frame-empty{border:1px dashed var(--line);border-radius:10px;background:#FAFAF8;
+  padding:56px 16px;text-align:center;color:var(--ink3);font-size:13px;
+  line-height:1.9;margin-top:10px}
+
+/* —— 后续新增：文件夹导入、合并建议、导出按钮组 —— */
+.flag{margin-left:auto;font-size:12px;padding:4px 10px;border-radius:999px;
+ background:#F1EFE8;color:#5F5E5A;white-space:nowrap}
+.flag.on{background:#E1F5EE;color:#0F6E56}
+.flag.off{background:#FAEEDA;color:#854F0B}
+.btns-row{display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap}
+.btns-row .hint{margin:0}
+.fitem .dot.warn{background:#EF9F27}
+.fitem .src{font-size:11px;color:#888780;margin-left:6px}
+.fitem.off{opacity:.45;text-decoration:line-through}
+.fitem .rm{margin-left:auto;cursor:pointer;color:#888780;font-size:14px;padding:0 2px}
+.fitem .rm:hover{color:#A32D2D}
+.types{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.tchip select{font-size:12px}
+.row.disabled{opacity:.5;pointer-events:none}
+#mergeGroups{margin-top:8px;line-height:1.6}
+.gtag{display:inline-block;background:#E6F1FB;border:1px solid #B5D4F4;color:#0C447C;
+ border-radius:6px;padding:2px 8px;margin:2px 4px 2px 0;font-size:12px}
+.nl-box{display:flex;gap:6px;margin:10px 0 4px}
+.nl-box .txt{flex:1}
+.preview .row{flex-wrap:wrap;gap:6px}
+
+/* —— 历史报告列表 ——
+   两级布局：上一行「名称 · 时间 · 摘要」，下一行「文件链接 + 按钮」。
+   原来名称、时间、4 个文件链接、按钮全挤在一行，报告攒多了根本认不出谁是谁。 */
+.histlist{margin-top:8px}
+.hitem{display:flex;flex-direction:column;gap:5px;
+ padding:8px 0;border-bottom:1px solid var(--line,#E5E3DC)}
+.hitem:last-child{border-bottom:none}
+.h-head{display:flex;align-items:baseline;gap:8px;min-width:0}
+.h-head .hnm{font-size:13px;font-weight:500;flex:0 1 auto;min-width:0;
+ overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hmeta{font-size:11px;color:var(--ink3);flex:none;white-space:nowrap}
+.h-foot{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.hchips{display:flex;gap:4px;flex-wrap:wrap}
+/* 按钮组推到这一行的右端（上一行的 .d-main 已经是 flex:1，不受影响） */
+.h-foot .d-acts{margin-left:auto}
+.hitem a.gtag{text-decoration:none}
+
+/* —— 数据库取数面板（只读） —— */
+#dbDetails > summary.db-sum{cursor:pointer;font-size:12px;color:var(--accent);margin-bottom:10px;
+  list-style:revert}
+#dbDetails[open] > summary.db-sum{margin-bottom:12px}
+.db-note{background:var(--ok);border:1px solid var(--ok-line);color:#0F6E56;font-size:12px;
+  padding:7px 10px;border-radius:8px;margin-bottom:10px;line-height:1.55}
+.db-note code{background:#fff;border:1px solid var(--ok-line);border-radius:4px;
+  padding:0 4px;font-size:11px;font-family:Consolas,"Courier New",monospace}
+.db-sql-row{margin-top:12px}
+#dbSql{font-family:Consolas,"Courier New",monospace;font-size:12px;line-height:1.5}
+#dbFields .row{margin-bottom:8px}
+#dbTables{margin-top:10px;max-height:230px;overflow:auto}
+#dbTables .fitem{cursor:pointer}
+#dbTables .fitem:hover{border-color:var(--accent)}
+#dbResult .tablewrap{margin-top:10px;max-height:260px}
+.db-col{font-size:11px;color:var(--ink3);margin-top:6px;line-height:1.7}
+.db-col b{color:var(--ink2);font-weight:500}
+
+/* ---------- 数据看板面板 ---------- */
+#dashName{min-width:220px}
+
+/* 表头：标签靠左、刷新按钮靠右，列表因此能吃满整行宽度 */
+.subhead{display:flex;align-items:center;gap:8px;margin:14px 0 8px}
+.subhead .lbl{font-size:12px;color:var(--ink2)}
+
+#dashList{width:100%;display:block}
+#dashList .fitem{cursor:default}
+/* 两栏：左侧信息块可收缩，右侧按钮组自身多大就占多大。
+   名称与元信息在信息块里各占一行，汉字不会再被压成竖条。
+   flex-wrap 是兜底 —— 窄到极限时按钮换行，也绝不溢出容器。 */
+#dashList .fitem.dash-item{display:flex;align-items:center;gap:10px;
+  padding:9px 11px;flex-wrap:wrap}
+.d-main{flex:1 1 160px;min-width:0;display:flex;flex-direction:column;gap:2px}
+.d-main > *{flex:none;min-width:0}
+.d-main .nm{font-size:13px;font-weight:500;color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.d-main .src{margin-left:0;font-size:11px;color:var(--ink3);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.d-acts{flex:none;display:flex;gap:6px}
+
+/* ---------- 报告 / 看板 视图切换（同一块地方，不再开两个窗口） ---------- */
+.viewbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.viewtabs{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.vtab{font:inherit;font-size:13px;padding:6px 20px;cursor:pointer;border:0;
+  background:#fff;color:var(--ink2);transition:.15s}
+.vtab:hover{color:var(--accent)}
+.vtab.on{background:var(--accent);color:#fff}
+.vtab+.vtab{border-left:1px solid var(--line)}
+.vacts{display:flex;gap:6px;flex-wrap:wrap}
+.c-split-wrap .hint{font-size:11px;color:var(--ink3)}
+
+/* ---------- 行内布局修复 ----------
+   select 在全局规则里带 width:100%，跟同一行的按钮抢空间，
+   结果「移除这张」「应用」被挤到换行，「保存到看板」甚至竖排成
+   「保 / 存 / 到 / 看 / 板」。这里明确分工：输入类控件吃掉剩余宽度，
+   按钮和说明保持自身尺寸、永不折行。 */
+/* 输入类控件吃掉同行剩余宽度，按钮和说明保持自身尺寸、永不折行。
+   **flex-basis 必须是 0，不能是 auto**：这些控件全局带着 width:100%，
+   用 auto 的话基准宽度就等于整行，同行的按钮会被挤到下一行 ——
+   在 .preview 里尤其明显（那边的 .row 带 flex-wrap，试过，搜索框和「刷新」真的会分成两行）。
+   flex:1 1 0 + width:auto 才是「按剩余空间分配」的正确写法。 */
+.row > select{flex:1 1 0;min-width:0;width:auto}
+.row > input.txt{flex:1 1 0;min-width:0;width:auto}
+.row > .btn,.row > button{flex:none;white-space:nowrap}
+/* 格式选择这类「短下拉」不该抢宽度，它内容本身就短 */
+.row > select.auto{flex:none;width:auto}
+.btn.primary.sm{width:auto}
+
+/* 类型标签：列名被压成竖排（销 / 售 / 额）就是这个引起的 */
+.tchip{flex:none;white-space:nowrap}
+.tchip select{width:auto;flex:none}
+
+/* 列表项里的按钮同样不折行 */
+.hitem .btn,.fitem .btn,#dashList .btn{flex:none;white-space:nowrap}
+
+/* `.vacts[hidden]` 曾在这里把被 .vacts{display:flex} 盖掉的 hidden 压回去。
+   现在文件顶上有全局的 [hidden]{display:none !important}，这条不再需要。 */
+
+/* 右栏偏窄，类型标签、预览按钮都挤在这里 —— 列宽已在上面的 .grid 里定好 */

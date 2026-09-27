@@ -1,0 +1,80 @@
+# ReportStudio 配置
+#
+# ⚠️ 这个文件设计成「会跟着项目一起走」的（进版本库、打包发给别人），
+#    所以这里只放公共、通用的设置。不要把密钥、绝对路径、私人信息写进来。
+#
+# 要放私密设置（API key、自己的输出目录、自己的数据库限额等），
+# 写在同目录的 config.local.yaml 里：
+#   · 它在 .gitignore 里，永远不会被提交，分享项目时也不会被带走
+#   · 同名的项会覆盖本文件的值（比如 llm.api_key）
+#   · 格式和本文件一样，只写你想覆盖的那几行就行，例如：
+#         llm:
+#           enabled: true
+#           api_key: sk-xxxxxxxx
+#           base_url: https://api.deepseek.com/v1
+#           model: deepseek-chat
+#
+# 两个文件都不存在也能跑：下面每个字段都有内置默认值。
+
+paths:
+  # 留空 = 自动用本项目目录下的 outputs / temp / dashboards（推荐，换台电脑也不用改）
+  # ⚠️ 别在这里填绝对路径（形如 E:/ReportStudio/outputs）：本文件会被分享出去，
+  #    别人机器上没有那个目录，会直接报错。要固定输出位置请写进 config.local.yaml。
+  outputs: ""                            # 生成的报告落这里
+  temp: ""                               # 上传缓存与中间文件
+  dashboards: ""                         # 常驻看板的存盘目录
+
+server:
+  host: 127.0.0.1
+  port: 8765
+  auto_open_browser: true
+
+# 大模型接口位。留空 = 不启用，功能自动降级，工具照样能用。
+# 三家任选其一填写，都走 OpenAI 兼容协议。
+#
+# DeepSeek:   base_url: https://api.deepseek.com/v1        model: deepseek-chat
+# 智谱 GLM:   base_url: https://open.bigmodel.cn/api/paas/v4   model: glm-4v-flash
+# 通义千问:   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1  model: qwen-plus
+# 本地 Ollama: base_url: http://127.0.0.1:11434/v1          model: qwen2.5:7b
+#
+# ⚠️ api_key 属于密钥，请填到 config.local.yaml，不要填在这个文件里 ——
+#    本文件会跟着项目分享出去，密钥填在这里等于发给了对方。
+#
+# 想给「图片 / 扫描 PDF 的结构化识别」单独指定模型（对话和视觉常是两个模型名）？
+# 在 config.local.yaml 的 llm 段加一行  vision_model: 模型名  即可，留空则用上面的 model。
+#
+# 分享给别人时，对方如果不想改文件，也可以直接设环境变量注入（优先级高于本文件）：
+#   RS_LLM_ENABLED=1  RS_LLM_BASE_URL=...  RS_LLM_API_KEY=...  RS_LLM_MODEL=...
+#   （可选 RS_LLM_VISION_MODEL=...  RS_LLM_TIMEOUT=秒）
+llm:
+  enabled: false
+  base_url: ""
+  api_key: ""
+  model: ""
+  vision_model: ""
+  timeout: 60
+  # 启用后承担三件事（任一失败都会静默降级到本地方案）：
+  #   1. 图片 / 扫描版 PDF 的结构化识别
+  #   2. 把「按月统计销售额画柱状图降序」这类话翻译成图表规格
+  #   3. 把程序算好的数字润色成通顺的分析段落（禁止模型改动任何数值）
+
+# 会话持久化：把导入的数据表存到磁盘，重启服务后不用重新传文件
+session:
+  persist: true        # 关闭后只在内存里，重启即丢
+  # 超过 5 万行的表和 7 天前的文件不落盘 / 自动清理，避免占满磁盘
+
+# 数据库取数（SQLite / MySQL / PostgreSQL / SQL Server / Oracle）
+# ⚠️ 只读是硬约束，不在这里给开关：只有 SELECT / WITH 会被执行，
+#    写操作、改表结构、改权限一律在语句层拦下，SQLite 还会以 mode=ro 打开做兜底。
+#    连接配置存在项目目录下的 db_connections.json（密码明文，不想留就取消勾选「记住密码」）。
+#    该文件已写进 .gitignore，不会被提交到任何仓库。
+database:
+  max_rows: 20000      # 单次取数最多带回多少行，超出会截断并在报告里说明
+  timeout_ms: 30000    # 单条查询最长执行时间，防一条大查询把服务拖死
+  connect_timeout: 8   # 建连接超时（秒），主机填错时快速失败而不是挂住
+  remember_password: true   # 保存连接时是否记住密码
+
+report:
+  default_template: full        # full 完整结构 / simple 精简
+  theme: light                  # light 商务浅色 / dark
+  max_preview_rows: 200
