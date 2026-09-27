@@ -1,10 +1,25 @@
 # ReportStudio 配置
-# 默认所有产物都写在「本项目自己的目录」下，不往系统盘写。
-# 所以换了电脑、或者把项目放到别的盘，这里都不用改。
+#
+# ⚠️ 这个文件设计成「会跟着项目一起走」的（进版本库、打包发给别人），
+#    所以这里只放公共、通用的设置。不要把密钥、绝对路径、私人信息写进来。
+#
+# 要放私密设置（API key、自己的输出目录、自己的数据库限额等），
+# 写在同目录的 config.local.yaml 里：
+#   · 它在 .gitignore 里，永远不会被提交，分享项目时也不会被带走
+#   · 同名的项会覆盖本文件的值（比如 llm.api_key）
+#   · 格式和本文件一样，只写你想覆盖的那几行就行，例如：
+#         llm:
+#           enabled: true
+#           api_key: sk-xxxxxxxx
+#           base_url: https://api.deepseek.com/v1
+#           model: deepseek-chat
+#
+# 两个文件都不存在也能跑：下面每个字段都有内置默认值。
 
 paths:
-  # 留空 = 自动用本项目目录下的 outputs / temp / dashboards（推荐）
-  # 想落到指定位置就填绝对路径，例如：E:/ReportStudio/outputs
+  # 留空 = 自动用本项目目录下的 outputs / temp / dashboards（推荐，换台电脑也不用改）
+  # ⚠️ 别在这里填绝对路径（形如 E:/ReportStudio/outputs）：本文件会被分享出去，
+  #    别人机器上没有那个目录，会直接报错。要固定输出位置请写进 config.local.yaml。
   outputs: ""                            # 生成的报告落这里
   temp: ""                               # 上传缓存与中间文件
   dashboards: ""                         # 常驻看板的存盘目录
@@ -21,11 +36,22 @@ server:
 # 智谱 GLM:   base_url: https://open.bigmodel.cn/api/paas/v4   model: glm-4v-flash
 # 通义千问:   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1  model: qwen-plus
 # 本地 Ollama: base_url: http://127.0.0.1:11434/v1          model: qwen2.5:7b
+#
+# ⚠️ api_key 属于密钥，请填到 config.local.yaml，不要填在这个文件里 ——
+#    本文件会跟着项目分享出去，密钥填在这里等于发给了对方。
+#
+# 想给「图片 / 扫描 PDF 的结构化识别」单独指定模型（对话和视觉常是两个模型名）？
+# 在 config.local.yaml 的 llm 段加一行  vision_model: 模型名  即可，留空则用上面的 model。
+#
+# 分享给别人时，对方如果不想改文件，也可以直接设环境变量注入（优先级高于本文件）：
+#   RS_LLM_ENABLED=1  RS_LLM_BASE_URL=...  RS_LLM_API_KEY=...  RS_LLM_MODEL=...
+#   （可选 RS_LLM_VISION_MODEL=...  RS_LLM_TIMEOUT=秒）
 llm:
   enabled: false
   base_url: ""
   api_key: ""
   model: ""
+  vision_model: ""
   timeout: 60
   # 启用后承担三件事（任一失败都会静默降级到本地方案）：
   #   1. 图片 / 扫描版 PDF 的结构化识别

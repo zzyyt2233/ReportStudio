@@ -48,12 +48,37 @@ def main() -> int:
     print("\n[v] JS 用到的 class 都有出处" if not unknown
           else f"\n[!] 以下 class 在 HTML 与 JS 模板里都没出现: {unknown}")
 
+    # hidden 属性：浏览器的 [hidden]{display:none} 属于 UA 样式表，
+    # 作者样式里任何一条 display 都能把它压掉（与优先级无关）。本文件里
+    # .row / .vacts / .c-ytypes 都写了 display，于是「设了 hidden 却照常显示」：
+    # 报告页签下冒出看板按钮、只剩一个指标时「多指标」那行还挂着。
+    # 必须有一条全局 !important 兜底，这里把它钉住，免得以后又被顺手删掉。
+    css = open(os.path.join(WEB, "style.css"), encoding="utf-8").read()
+    has_guard = bool(re.search(
+        r"\[hidden\]\s*\{[^}]*display\s*:\s*none\s*!important", css))
+    print("\n[v] hidden 属性有全局兜底（不会被 class 上的 display 盖掉）" if has_guard
+          else "\n[x] style.css 缺少 [hidden]{display:none !important} —— "
+               "带 display 的 class 会让 hidden 失效，该藏的控件藏不住")
+
+    # 看板 HTML 的样式是**另一份**（core/render/dashboard.py 里的 CSS 常量），
+    # 上面这条管不到它。放大层的 .zb 写了 display:flex 又带 hidden 属性，
+    # 少了兜底的话页面一打开就是一层灰遮罩盖住整个看板。
+    root = os.path.dirname(WEB)
+    sys.path.insert(0, root)
+    from core.render import dashboard as _dash  # noqa: E402
+    dash_guard = bool(re.search(
+        r"\[hidden\]\s*\{[^}]*display\s*:\s*none\s*!important", _dash.CSS))
+    print("[v] 看板 CSS 同样有 hidden 兜底" if dash_guard
+          else "[x] 看板 CSS（core/render/dashboard.py）缺少 "
+               "[hidden]{display:none !important} —— 放大层的遮罩会一直显示")
+    has_guard = has_guard and dash_guard
+
     # 后端返回字段：JS 读的字段应在后端 to_dict / 接口里有
     print("\n---- 后端字段抽查 ----")
     fields = ["total_rows", "source_type", "warnings", "columns", "rows",
               "suggestion", "group_names", "report_url", "md_url", "dir",
               "charts", "metrics", "summary", "dataset", "results", "ok",
-              "name", "id", "url", "path", "items", "files"]
+              "name", "id", "url", "path", "items", "files", "y_types"]
     backend = ""
     root = os.path.dirname(WEB)
     for f in ("app.py", os.path.join("core", "model.py"),
@@ -65,7 +90,7 @@ def main() -> int:
     print("[v] JS 读的字段后端都有" if not miss_field
           else f"[!] 后端找不到这些字段: {miss_field}")
 
-    return 1 if (missing or miss_field) else 0
+    return 1 if (missing or miss_field or not has_guard) else 0
 
 
 if __name__ == "__main__":

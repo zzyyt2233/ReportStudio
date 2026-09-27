@@ -257,5 +257,122 @@ window.__runAsserts = (async function () {
   ok(pv3.length === 2, '切回报告不会多余地重算看板');
   ok($('#actsReport').hidden === false, '切回报告后按钮组换回来');
 
+  /* ---------- 17. 每个指标各自的图型（不再是所有指标共用一个） ---------- */
+  $('#charts').innerHTML = '';
+  addChartCard({ type: 'bar', x: '省份', y: ['销售额', '订单量'], agg: 'sum' });
+  const tc = $$('.chart-card')[0];
+  ok(tc.querySelectorAll('.yt-row').length === 2,
+     '两个已选指标各有一行图型设置（实际 '
+     + tc.querySelectorAll('.yt-row').length + ' 行）');
+
+  const pick = (n) => $$('.yt-type', tc).find(s => s.dataset.n === n);
+  ok($$('.yt-type', tc).every(s => s.value === ''), '默认都是「跟随默认」');
+  ok(pick('销售额').options[0].textContent.indexOf('柱状图') >= 0,
+     '「跟随默认」写明当前默认图型是什么（实际：'
+     + pick('销售额').options[0].textContent + '）');
+
+  // 只给其中一个指标单独指定折线
+  pick('订单量').value = 'line';
+  pick('订单量').onchange();
+  ok(collectSpec().charts[0].y_types['订单量'] === 'line',
+     '单独指定的图型被收进 spec（实际 '
+     + JSON.stringify(collectSpec().charts[0].y_types) + '）');
+  ok(collectSpec().charts[0].y_types['销售额'] === undefined,
+     '跟着默认的那个不写进 y_types —— 全写进去的话改默认图型就对它不生效了');
+
+  // 改成饼图：得说清楚它会单独成图，不然用户以为界面没反应
+  pick('订单量').value = 'pie';
+  pick('订单量').onchange();
+  ok(tc.textContent.indexOf('单独成图') >= 0, '选了饼图会写明它会单独成图');
+  ok(tc.querySelector('.c-split-wrap').hidden === true,
+     '只剩一个指标进得了同一张图时，「拆/合」选择被隐藏（没有可做的选择）');
+
+  // 改默认图型：跟随默认的指标要跟着变
+  pick('订单量').value = 'line';
+  pick('订单量').onchange();
+  tc.querySelector('.c-type').value = 'stack_bar';
+  tc.querySelector('.c-type').onchange();
+  ok(pick('销售额').options[0].textContent.indexOf('堆叠柱状图') >= 0,
+     '改默认图型后「跟随默认」的标签同步更新（实际：'
+     + pick('销售额').options[0].textContent + '）');
+  ok(pick('销售额').value === '', '它自己仍然是跟随默认，没被写死');
+
+  // 取消一个指标再勾回来，别的指标已经选好的图型不能跟着丢
+  $$('.c-y .chip', tc).forEach(c => {
+    if (c.dataset.n === '销售额') c.classList.remove('on');
+  });
+  renderYTypes(tc);
+  ok($$('.yt-type', tc).length === 1, '取消一个指标后只剩一行图型设置');
+  $$('.c-y .chip', tc).forEach(c => c.classList.add('on'));
+  renderYTypes(tc);
+  ok(pick('订单量') && pick('订单量').value === 'line',
+     '勾回来之后，另一个指标选好的图型还在（实际 '
+     + (pick('订单量') || {}).value + '）');
+
+  /* ---------- 18. 预览区放大（看板里「放大某张图」要地方铺开） ---------- */
+  setFrame('/dashboards/_preview.html');
+  ok($('#frameZoom').disabled === false, '有内容之后「放大预览」可用');
+  ok($('#frame').classList.contains('zoomed') === false, '默认不是放大态');
+
+  $('#frameZoom').onclick();
+  ok($('#frame').classList.contains('zoomed'), '点一下就铺满窗口');
+  ok($('#frameZoom').textContent === '退出放大',
+     '按钮文字跟着变（实际 ' + $('#frameZoom').textContent + '）');
+
+  const esc = new window.KeyboardEvent('keydown', {key: 'Escape', bubbles: true});
+  document.dispatchEvent(esc);
+  ok($('#frame').classList.contains('zoomed') === false, 'ESC 能退出放大');
+  ok($('#frameZoom').textContent === '放大预览', '按钮文字也复位了');
+
+  // 清空预览时不能留在放大态 —— 否则会看到一块盖住整屏的空白
+  $('#frameZoom').onclick();
+  setFrame('');
+  ok($('#frame').classList.contains('zoomed') === false, '清空预览会退出放大');
+  ok($('#frameZoom').disabled === true, '没内容时「放大预览」是禁用的');
+  setFrame('');
+
+  /* ---------- 19. 横纵轴切换：角色互换 ---------- */
+  // 场景A：横轴=省份(text)，纵轴=[销售额, 毛利率] → 切换后横轴=销售额，
+  // 省份(text非数值)不进纵轴，毛利率仍在。
+  $('#charts').innerHTML = '';
+  addChartCard({ type: 'bar', x: '省份', y: ['销售额', '毛利率'], agg: 'sum' });
+  const sw = $$('.chart-card')[0];
+  swapAxis(sw);
+  ok(sw.querySelector('.c-x').value === '销售额',
+     '切换后横轴变成原第一个纵轴指标（销售额）');
+  ok(!$$('.c-y .chip', sw).find(c => c.dataset.n === '销售额').classList.contains('on'),
+     '原横轴指标已移出纵轴');
+  ok($$('.c-y .chip', sw).find(c => c.dataset.n === '毛利率').classList.contains('on'),
+     '另一个指标仍在纵轴（非空不撤销）');
+
+  // 场景B：横轴=省份(text)，纵轴=[销售额] 单指标 → 切换会让纵轴空，应撤销
+  $('#charts').innerHTML = '';
+  addChartCard({ type: 'bar', x: '省份', y: ['销售额'] });
+  const sw2 = $$('.chart-card')[0];
+  swapAxis(sw2);
+  ok(sw2.querySelector('.c-x').value === '省份',
+     '单指标且原横轴非数值：切换被撤销，横轴不变（实际 '
+     + sw2.querySelector('.c-x').value + '）');
+
+  // 场景C：数值型维度（年份）也能当横轴并切换 —— 验证「横轴纵轴都识别」
+  STORE['t2'] = {
+    id: 't2', name: '带年份', source_type: 'paste', total_rows: 4, warnings: [],
+    columns: [
+      { name: '年份', dtype: 'number' }, { name: '地区', dtype: 'text' },
+      { name: '销售额', dtype: 'number' },
+    ],
+    rows: [{ 年份: 2020, 地区: '华东', 销售额: 100 }],
+  };
+  curId = 't2';
+  $('#charts').innerHTML = '';
+  addChartCard({ type: 'bar', x: '地区', y: ['销售额'] });
+  const sw3 = $$('.chart-card')[0];
+  sw3.querySelector('.c-x').value = '年份';   // 数值型维度作横轴
+  swapAxis(sw3);
+  ok(sw3.querySelector('.c-x').value === '销售额',
+     '数值型横轴(年份)切换：原指标销售额变横轴');
+  ok($$('.c-y .chip', sw3).find(c => c.dataset.n === '年份').classList.contains('on'),
+     '原数值型横轴年份被收进纵轴（只有数值才能当纵轴）');
+
   return true;
 })();

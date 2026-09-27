@@ -6,6 +6,7 @@ import json
 import os
 from datetime import datetime
 
+from ..analyze import detail_rows, detail_sort_label
 from ..model import Dataset, ReportSpec
 
 CSS = """
@@ -43,6 +44,10 @@ h2{font-size:17px;font-weight:500;margin:36px 0 14px;padding-left:10px;border-le
 table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;white-space:nowrap}
 th{background:#F1EFE8;color:#444441;font-weight:500;position:sticky;top:0}
+/* 排序标记：明细表按哪一列排的，要能一眼看出来。
+   只排了不说，用户会对着「顺序怎么变了」怀疑数据被动过。 */
+th .srt{color:var(--accent);font-weight:700;margin-left:4px}
+th.sorted{color:var(--accent)}
 .scroll{max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:12px}
 .warn{background:#FAEEDA;border:1px solid #FAC775;border-radius:10px;padding:12px 16px;
  font-size:13px;color:#633806;margin-top:10px}
@@ -122,7 +127,17 @@ def render_report(datasets: list[Dataset], spec: ReportSpec, chart_blocks: list[
 
     if spec.template == "full":
         # 多张表就每张贴一份明细，只显示第一张的话等于把其他来源藏起来了
-        parts.append('<h2>明细数据</h2>')
+        # 列名取所有表的并集：排序列只要在其中一张表里存在，顶部说明就如实写出来；
+        # 一张都不存在（比如「明细按不存在的列排」）则保持静默，不谎称排了序。
+        all_cols = {c.name for d in datasets for c in d.columns}
+        sort_note = detail_sort_label(spec, all_cols)
+        sby = (getattr(spec, "detail_sort_by", "") or "").strip()
+        sdesc = str(getattr(spec, "detail_sort_order", "asc") or "asc") == "desc"
+        mark = '<span class="srt">↓</span>' if sdesc else '<span class="srt">↑</span>'
+        parts.append('<h2>明细数据'
+                     + (f'<span class="meta"> · {_esc(sort_note)}</span>'
+                        if sort_note else '')
+                     + '</h2>')
         for ds in datasets:
             cols = ds.columns
             if not cols:
@@ -134,9 +149,14 @@ def render_report(datasets: list[Dataset], spec: ReportSpec, chart_blocks: list[
                              f'margin:16px 0 8px">{head}</div>')
             parts.append('<div class="scroll"><table><thead><tr>')
             for c in cols:
-                parts.append(f"<th>{_esc(c.name)}</th>")
+                # 被排的那一列表头加个箭头：只排了不说，顺序变了会让人以为数据被动过
+                if sby and c.name == sby:
+                    parts.append(f'<th class="sorted">{_esc(c.name)}{mark}</th>')
+                else:
+                    parts.append(f"<th>{_esc(c.name)}</th>")
             parts.append("</tr></thead><tbody>")
-            for r in ds.rows[:300]:
+            # 先排序再截断：降序 + 只展示 300 行时，看到的必须是真的前 300 名
+            for r in detail_rows(ds, spec)[:300]:
                 parts.append("<tr>")
                 for c in cols:
                     v = r.get(c.name)
@@ -147,8 +167,10 @@ def render_report(datasets: list[Dataset], spec: ReportSpec, chart_blocks: list[
                 parts.append("</tr>")
             parts.append("</tbody></table></div>")
             if ds.total_rows > 300:
+                shown = (f'，按「{_esc(sby)}」{"降序" if sdesc else "升序"}'
+                         f'展示前 300 行') if sby else '，此处展示前 300 行'
                 parts.append(f'<div class="meta" style="margin-top:8px">'
-                             f'共 {ds.total_rows} 行，此处展示前 300 行</div>')
+                             f'共 {ds.total_rows} 行{shown}</div>')
 
     # 提示不随模板消失：数据来源、行数截断、缺失值处理、类型冲突这些
     # 恰恰是判断「数字可不可信」的依据，藏起来比不给还糟。

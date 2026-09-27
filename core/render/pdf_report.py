@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 from xml.sax.saxutils import escape as _xml_escape
 
+from ..analyze import detail_rows, detail_sort_label
 from ..model import Dataset, ReportSpec
 
 
@@ -123,14 +124,21 @@ def render_pdf(datasets: list[Dataset], spec: ReportSpec,
                 pass
 
     if spec.template == "full":
+        note = detail_sort_label(spec, {c.name for d in datasets for c in d.columns})
+        sby = (getattr(spec, "detail_sort_by", "") or "").strip()
+        sdesc = str(getattr(spec, "detail_sort_order", "asc") or "asc") == "desc"
         for ds in datasets:
             cols = ds.columns[:10]
             if not cols:
                 continue
             head = _esc(ds.name) if len(datasets) > 1 else "明细数据"
+            if note:
+                head += f"（{_esc(note)}）"
             story.append(Paragraph(head, sec))
-            data = [[c.name for c in cols]]
-            for r in ds.rows[:120]:
+            mark = (" ↓" if sdesc else " ↑") if sby else ""
+            data = [[c.name + (mark if sby and c.name == sby else "")
+                     for c in cols]]
+            for r in detail_rows(ds, spec)[:120]:
                 row = []
                 for c in cols:
                     v = r.get(c.name)

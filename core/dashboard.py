@@ -60,6 +60,10 @@ class DashboardConfig:
     merge_mode: str = "merge"
     metrics: list[str] = field(default_factory=list)
     charts: list[dict] = field(default_factory=list)
+    # 每张图被用户拖出来的自由尺寸：{ block_id: {"span": int, "height": int} }。
+    # 和 charts 分开存，是因为「多指标拆开」后渲染出的图块数 > 配置里的图数，
+    # 用 block_id（chart0/chart1…）对齐最稳，不受拆分顺序影响。
+    sizes: dict = field(default_factory=dict)
     updated: str = ""
     created: str = ""
 
@@ -99,6 +103,10 @@ def from_payload(payload: dict, base: DashboardConfig | None = None
             "dual_axis": bool(c.get("dual_axis")),
             "exclude_summary": c.get("exclude_summary", True) is not False,
             "split_series": bool(c.get("split_series")),
+            # 每个指标单独的图型。这里只做原样带过 —— 净化交给
+            # ChartSpec.__post_init__（只留选中指标里、且图型认得出来的项），
+            # 免得同一个规则要在入库和渲染两处各写一遍。
+            "y_types": c.get("y_types") or {},
             "span": norm_span(c.get("span")),
             "height": c.get("height") or 320,
         })
@@ -114,6 +122,9 @@ def from_payload(payload: dict, base: DashboardConfig | None = None
         merge_mode=(payload.get("merge_mode") or base.merge_mode or "merge"),
         metrics=[str(m) for m in (payload.get("metrics") or base.metrics or [])],
         charts=charts,
+        # 用户拖出来的自由尺寸跟图表配置分开存，save 时若不手工带过会被新对象清空。
+        # base 传入（在老看板上改）时一律沿用，避免「保存一次尺寸就回弹」。
+        sizes=dict(base.sizes) if base and getattr(base, "sizes", None) else {},
         updated=base.updated,
         created=base.created,
     )
@@ -242,7 +253,7 @@ def resolve_datasets(cfg: DashboardConfig, session: dict
 
 
 def render(datasets: list[Dataset], cfg: DashboardConfig, vendor_path: str,
-           missing: list[str]) -> tuple[str, dict]:
+           missing: list[str], dash_id: str | None = None) -> tuple[str, dict]:
     """算出图表与指标卡，渲染成看板 HTML。返回 (html, 统计信息)。"""
     if cfg.merge_mode == "merge" and len(datasets) > 1:
         datasets = [merge_group(g) for g in group_datasets(datasets)]
@@ -264,6 +275,19 @@ def render(datasets: list[Dataset], cfg: DashboardConfig, vendor_path: str,
 
     chart_blocks, _ = build_blocks(datasets, specs, decorate=_deco)
 
+    # 用户拖出来的自由尺寸优先级最高：它记的是渲染后图块（block_id），
+    # 比「来源配置」更贴近用户真正看到的那张图，所以最后覆盖一次。
+    for b in chart_blocks:
+        sz = cfg.sizes.get(b.get("id"))
+        if isinstance(sz, dict):
+            if sz.get("span"):
+                b["span"] = norm_span(sz["span"])
+            if sz.get("height"):
+                try:
+                    b["height"] = max(160, min(960, int(sz["height"])))
+                except (TypeError, ValueError):
+                    pass
+
     metric_cards = []
     excl = all(getattr(s, "exclude_summary", True) for s in specs)
     for ds in datasets:
@@ -276,7 +300,8 @@ def render(datasets: list[Dataset], cfg: DashboardConfig, vendor_path: str,
         metric_cards += cards
 
     html = build_dashboard_html(cfg.title or cfg.name, cfg.subtitle, datasets,
-                                chart_blocks, metric_cards, missing, vendor_path)
+                                chart_blocks, metric_cards, missing, vendor_path,
+                                dash_id=dash_id if dash_id is not None else cfg.id)
     return html, {"charts": len(chart_blocks), "metrics": len(metric_cards),
                   "datasets": len(datasets)}
 
@@ -284,7 +309,7 @@ def render(datasets: list[Dataset], cfg: DashboardConfig, vendor_path: str,
 def render_to_file(datasets: list[Dataset], cfg: DashboardConfig,
                    vendor_path: str, missing: list[str]) -> dict:
     """渲染并落盘，返回可访问的 URL。"""
-    html, stat = render(datasets, cfg, vendor_path, missing)
+    html, stat = render(datasets, cfg, vendor_path, missing, dash_id=cfg.id)
     path = _html_path(cfg.id)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -307,7 +332,7 @@ def render_preview(datasets: list[Dataset], cfg: DashboardConfig,
     为什么带时间戳：内容变了但 URL 没变，浏览器会直接拿缓存，
     用户切回来看到的还是上一次的看板 —— 这种「明明刷新了却没变」最难查。
     """
-    html, stat = render(datasets, cfg, vendor_path, missing)
+    html, stat = render(datasets, cfg, vendor_path, missing, dash_id="_preview")
     path = os.path.join(_dir(), PREVIEW_NAME)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:

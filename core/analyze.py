@@ -57,23 +57,106 @@ def working_rows(ds: Dataset, exclude_summary: bool = True) -> list[dict]:
     return drop_summary_rows(ds) if exclude_summary else ds.rows
 
 
+# ------------------------------------------------------- 明细数据表的排序
+
+def _row_sort_key(v, dtype: str) -> tuple:
+    """单行排序键。三段结构：(分组, 数值, 文本块序列)。
+
+    分组是必须的：一列里可能混着数字和文字（导入时没认全的类型很常见），
+    直接拿 v 去比会撞上「int 和 str 不能比」的 TypeError，整份报告当场崩。
+    分三组后同一组内永远只有一种类型可比：
+
+        0 = 数值（按数值大小）
+        1 = 文本 / 日期（按自然序，"1月" 排在 "10月" 前面）
+        2 = 空值 —— 无论升序降序都沉底
+
+    为什么空值恒沉底：升序时空值在最前，用户第一眼看到的是一片空白行，
+    会以为「表坏了 / 数据没了」。沉底至少保证前几行永远有内容。
+    """
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return (2, 0.0, "")
+    if dtype == "number" and isinstance(v, (int, float)) and not isinstance(v, bool):
+        return (0, float(v), [])
+    # 文本/日期走自然序：纯字符串序会把「10月」排在「1月」前面
+    return (1, 0.0, _natkey(v))
+
+
+def sorted_detail_rows(rows: list[dict], col: str, order: str = "asc",
+                       dtype: str = "text") -> list[dict]:
+    """按一列给明细行排序。**返回新列表**，绝不原地改 ds.rows。
+
+    原地改的代价很大：ds.rows 是会话里那张表本身，改了之后
+    「数据预览」「导出这张表」「看板」看到的顺序全都跟着变，
+    而用户只是想让**报告里**这一张表排个序。
+
+    空值永远沉底：不管是升序还是降序，带空值的行都排在最末。
+    做法把「空值」和「有值」拆成两段分别排，最后把空值段接在后面 ——
+    不能靠 sorted(reverse=True) 一刀切，那样会把空值也一并翻到最前，
+    和界面上「空值排最后」的提示对不上（也确实更难看）。
+    """
+    desc = str(order or "asc").lower() == "desc"
+    nulls = [r for r in rows if r.get(col) is None
+             or (isinstance(r.get(col), str) and not str(r.get(col)).strip())]
+    real = [r for r in rows if r not in nulls]
+    real.sort(key=lambda r: _row_sort_key(r.get(col), dtype))
+    if desc:
+        real.reverse()
+    return real + nulls
+
+
+def detail_rows(ds: Dataset, spec) -> list[dict]:
+    """报告「明细数据」段要列出的行（已按 spec 排序）。
+
+    排序列在这张表里不存在时**原样返回**，不排序也不报错。
+    报告可能同时列出多张表（合并模式下更是拼成一张），
+    列名对不上时静默保持原顺序，比抛异常或排出一个全空表都合理。
+    """
+    by = (getattr(spec, "detail_sort_by", "") or "").strip()
+    if not by:
+        return ds.rows
+    col = next((c for c in ds.columns if c.name == by), None)
+    if col is None:
+        return ds.rows
+    return sorted_detail_rows(ds.rows, by,
+                              getattr(spec, "detail_sort_order", "asc") or "asc",
+                              getattr(col, "dtype", "text") or "text")
+
+
+def detail_sort_label(spec, columns=None) -> str:
+    """给报告用的一句话说明，如「按「销售额」降序（空值排最后）」。没排序时返回空串。
+
+    columns 传这一张表真实的列名集合：排序列在某张表里不存在时，detail_rows
+    会原样返回（不排序），这里也得跟着返回空串 —— 否则会出现「界面说按X排了序、
+    表里却没动」的假提示。columns 不传则退化为只看字段有没有填。
+    """
+    by = (getattr(spec, "detail_sort_by", "") or "").strip()
+    if not by:
+        return ""
+    if columns is not None and by not in columns:
+        return ""
+    desc = str(getattr(spec, "detail_sort_order", "asc") or "asc").lower() == "desc"
+    return f"按「{by}」{'降序' if desc else '升序'}（空值排最后）"
+
+
 def aggregate(ds: Dataset, spec: ChartSpec) -> dict:
     """按 spec 聚合出 ECharts 需要的 categories + series。"""
     rows = working_rows(ds, getattr(spec, "exclude_summary", True))
     x = spec.x
     y_cols = [c for c in spec.y if c in {col.name for col in ds.columns}]
 
-    # y 轴单位（百分比列、带「率/占比」的列），传给图表层用于显示
-    unit = ""
-    if y_cols:
-        for col in ds.columns:
-            if col.name == y_cols[0]:
-                unit = col.unit or ""
-                break
+    # y 轴单位。**每个指标各算各的** —— 一张图里同时画「销售额」和「毛利率」时，
+    # 只取第一个指标的单位会让百分比列按原样画（0.15 而不是 15），
+    # 图上那根线贴着 0 看不出什么，鼠标悬停还显示 0.15，等于悄悄给错数。
+    units: dict[str, str] = {}
+    for col in ds.columns:
+        if col.name in y_cols:
+            units[col.name] = col.unit or ""
+    # 保留 unit：单指标时的返回值，饼图/散点图和指标卡还在用它
+    unit = units.get(y_cols[0], "") if y_cols else ""
 
     if not x or not y_cols:
         return {"categories": [], "series": [], "empty": True, "unit": unit,
-                "effective_type": spec.type, "pie_negative": []}
+                "units": units, "effective_type": spec.type, "pie_negative": []}
 
     # 散点图不做聚合，直接取点
     if spec.type == "scatter":
@@ -83,7 +166,7 @@ def aggregate(ds: Dataset, spec: ChartSpec) -> dict:
             if isinstance(xv, (int, float)) and isinstance(yv, (int, float)):
                 pts.append([xv, yv])
         return {"categories": [], "series": [{"name": y_cols[0], "data": pts}],
-                "scatter": True, "unit": unit,
+                "scatter": True, "unit": unit, "units": units,
                 "effective_type": spec.type, "pie_negative": []}
 
     buckets: dict[str, list[dict]] = {}
@@ -179,6 +262,7 @@ def aggregate(ds: Dataset, spec: ChartSpec) -> dict:
         series = [{"name": s["name"], "data": s["data"][: spec.limit]} for s in series]
 
     return {"categories": categories, "series": series, "unit": unit,
+            "units": units,
             "skipped_empty_category": skipped_empty_cat, "x": x,
             "effective_type": effective_type, "pie_negative": pie_negative}
 

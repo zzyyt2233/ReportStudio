@@ -2,7 +2,22 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 
+REM 免安装版：包里自带 Python 运行时，优先用它，不用装 Python、不用联网
+if exist "runtime\py\python.exe" goto runportable
+
 if not exist ".venv\Scripts\python.exe" goto bootstrap
+goto run
+
+:runportable
+echo.
+echo   ReportStudio 正在启动（使用包内自带的 Python 运行时）...
+echo   产物目录：%CD%\outputs
+echo   启动后浏览器会自动打开 http://127.0.0.1:8765
+echo   关掉这个黑窗口就会停止服务
+echo.
+"runtime\py\python.exe" app.py
+if errorlevel 1 goto failed
+exit /b 0
 
 :run
 echo.

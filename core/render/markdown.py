@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
+from ..analyze import detail_rows, detail_sort_label
 from ..model import Dataset, ReportSpec
 
 
@@ -63,7 +64,8 @@ def render_markdown(datasets: list[Dataset], spec: ReportSpec,
             lines.append("")
 
     if spec.template == "full" and datasets:
-        lines += ["## 明细数据", ""]
+        note = detail_sort_label(spec, {c.name for d in datasets for c in d.columns})
+        lines += ["## 明细数据" + (f"（{note}）" if note else ""), ""]
         for ds in datasets:
             cols = [c.name for c in ds.columns]
             if not cols:
@@ -72,7 +74,7 @@ def render_markdown(datasets: list[Dataset], spec: ReportSpec,
                 lines += [f"### {_cell(ds.name)}（{ds.total_rows} 行）", ""]
             lines += ["| " + " | ".join(_cell(c) for c in cols) + " |",
                       "| " + " | ".join(["---"] * len(cols)) + " |"]
-            for r in ds.rows[:300]:
+            for r in detail_rows(ds, spec)[:300]:
                 lines.append("| " + " | ".join(
                     "" if r.get(c) is None else _cell(r.get(c)) for c in cols) + " |")
             lines.append("")

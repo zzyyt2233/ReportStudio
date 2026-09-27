@@ -11,19 +11,88 @@
 
 from __future__ import annotations
 
+import itertools
 import os
 import sys
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 
-def make_client():
-    """建一个 TestClient（不需要真的起服务）。"""
+def make_client(isolate: bool = True):
+    """建一个 TestClient（不需要真的起服务）。
+
+    默认把**看板目录**整体挪到 temp 下 —— 见 isolate_dashboards() 里的说明。
+    """
+    if isolate:
+        isolate_dashboards()
     from fastapi.testclient import TestClient
     import app as server
     return TestClient(server.app)
+
+
+_ISOLATED_DIR: str = ""
+
+
+def dashboards_dir() -> str:
+    """当前生效的看板目录（隔离之后就是 temp 里那个）。"""
+    from core import config as cfgmod
+    return cfgmod.dashboards_dir()
+
+
+def isolate_dashboards() -> str:
+    """把看板目录指到 temp 下，别动用户真实的那一份。
+
+    不加这个的话，跑一次回归就会：
+
+    - 在 `dashboards/` 里真建几个看板。跑完会删，但删除被守卫拦下时
+      会留下 `.deleted` 残片，越攒越多。
+    - **覆盖 `dashboards/_preview.html`** —— 这是「看板」页签的预览文件。
+      用户此刻开着工具界面的话，刷新一下就变成测试内容了（本机撞到过：
+      界面上显示的是测试建的「预览放大」看板）。
+
+    两处都要改：文件写到哪（config.dashboards_dir），以及 HTTP 从哪读
+    （app.py 里 `/dashboards` 那个 StaticFiles 挂载，它是 import 时就固定下来的）。
+    只改前者的话，测试里「通过 URL 拿看板 HTML」会读到真目录，仍会串。
+
+    看板 id 也换成固定序列（见下）：随机 id 会让每次跑都攒下一批新文件，
+    而删除又要弹权限确认。固定下来就是覆盖同名文件，不用删任何东西。
+    """
+    global _ISOLATED_DIR
+    if _ISOLATED_DIR:
+        return _ISOLATED_DIR
+
+    from core import config as cfgmod
+    from core import dashboard as dashmod
+    d = os.path.join(ROOT, "temp", "dashboards_test")
+    os.makedirs(d, exist_ok=True)
+    cfgmod.dashboards_dir = lambda: d          # type: ignore[assignment]
+
+    _n = itertools.count(1)
+    dashmod.new_id = lambda: f"t{next(_n):06d}"   # type: ignore[assignment]
+
+    import app as server
+    _retarget_mount(server.app, d)
+    _ISOLATED_DIR = d
+    return d
+
+
+def _retarget_mount(app_obj, new_dir: str) -> None:
+    """把 `/dashboards` 的静态挂载改指到新目录。
+
+    StaticFiles 把目录缓存成两个属性，只改 directory 不够 ——
+    实际查找走的是 all_directories。
+    """
+    from starlette.staticfiles import StaticFiles
+    for route in getattr(app_obj, "routes", []):
+        if getattr(route, "name", "") != "dashboards":
+            continue
+        sub = getattr(route, "app", None)
+        if isinstance(sub, StaticFiles):
+            sub.directory = new_dir
+            sub.all_directories = [new_dir]
 
 
 def datasets(client) -> list[dict]:
@@ -72,6 +141,10 @@ class IsolatedSession:
         return ds_id
 
     def __exit__(self, *exc) -> bool:
+        if not can_delete():
+            print("  ⚠ 本 turn 的删除额度已用尽，跳过清理：测试建的表可能暂时留在"
+                  "\n     会话里（不影响下面的断言）。下个回合重跑一次即可恢复干净。")
+            return False
         for did in set(self.created):
             try:
                 self.client.delete(f"/api/dataset/{did}")
@@ -115,6 +188,27 @@ def temp_db_path(name: str = "test_shop.db") -> str:
     d = os.path.join(ROOT, "temp", "dbtest")
     os.makedirs(d, exist_ok=True)
     return os.path.join(d, name)
+
+
+def can_delete(probe_dir: str = "") -> bool:
+    """当前环境还允许删文件吗？
+
+    受限沙箱有一层批量删除守卫：**一个 turn 内累计删满 50 个文件**之后，
+    后面的 os.remove / rmtree 会被拦下。连跑几套回归很容易把额度用光 ——
+    这时删除类断言会「假失败」，但那是环境限制，不是产品缺陷。
+
+    探测方式：建一个只属于自己的临时文件再删掉，绝不碰用户数据。
+    """
+    d = probe_dir or os.path.join(ROOT, "temp")
+    p = os.path.join(d, f"_delprobe_{os.getpid()}_{int(time.time() * 1000)}.tmp")
+    try:
+        os.makedirs(d, exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("x")
+        os.remove(p)
+    except BaseException:
+        return False
+    return not os.path.exists(p)
 
 
 def remove_file(path: str) -> None:

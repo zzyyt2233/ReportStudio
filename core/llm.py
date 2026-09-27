@@ -79,8 +79,13 @@ def _safe_json(text: str) -> dict:
 
 
 def vision(image_path: str, prompt: str, want_json: bool = True):
-    """图片/扫描件识别。图片转 base64 后随 prompt 一起发。"""
+    """图片/扫描件识别。图片转 base64 后随 prompt 一起发。
+
+    视觉模型可与对话模型分开：config 里写了 llm.vision_model 就优先用它，
+    否则回落到 llm.model（很多账号对话和视觉是不同模型名）。
+    """
     cfg = _cfg()
+    model = cfg.get("vision_model") or cfg["model"]
     url = cfg["base_url"].rstrip("/") + "/chat/completions"
     mime = "image/png"
     if image_path.lower().endswith((".jpg", ".jpeg")):
@@ -88,7 +93,7 @@ def vision(image_path: str, prompt: str, want_json: bool = True):
     with open(image_path, "rb") as f:
         b64 = base64.b64encode(f.read()).decode()
     payload = {
-        "model": cfg["model"],
+        "model": model,
         "temperature": 0.1,
         "messages": [{
             "role": "user",
@@ -139,7 +144,10 @@ NL2SPEC_PROMPT = (
     "- agg: sum / mean / count / max / min\n"
     "- sort_by: 排序列名；sort_order: asc / desc\n"
     "- limit: 保留前几条；title: 图表标题\n"
-    "输出格式：{\"title\":\"报告标题\",\"charts\":[{...}],\"metrics\":[\"数值列\"]}\n"
+    "- detail_sort_by: 若用户要求「明细表/数据表按某列排序」则填该列名，否则留空字符串\n"
+    "- detail_sort_order: 明细排序方向 asc / desc\n"
+    "输出格式：{\"title\":\"报告标题\",\"charts\":[{...}],\"metrics\":[\"数值列\"],"
+    "\"detail_sort_by\":\"\",\"detail_sort_order\":\"asc\"}\n"
     "规则：\n"
     "1. 列名必须与用户给的候选列名**完全一致**，不允许自己造列名\n"
     "2. 拿不准就用候选里最贴近的那个，宁可选错列也不要返回不存在的列\n"

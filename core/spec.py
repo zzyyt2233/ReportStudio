@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-from .model import ChartSpec, Dataset, ReportSpec
+from .model import ChartSpec, Dataset, ReportSpec, classify_columns
 
 CHART_KEYWORDS = [
     ("combo", ("双轴", "柱线", "组合图")),
@@ -32,6 +32,11 @@ DESC_WORDS = ("降序", "从大到小", "由大到小", "从高到低", "由高�
               "从多到少", "由多到少", "倒序", "逆序")
 ASC_WORDS = ("升序", "从小到大", "由小到大", "从低到高", "由低到高",
              "从少到多", "由少到多", "正序")
+
+# 点到这些词，说的才是「明细数据表怎么排」，而不是「图怎么排」。
+# 不加这层判定的话，「按销售额降序」会把明细表也顺手排了 ——
+# 用户没要求的东西别替他做：明细表偶尔就是要保持原始行序（比如按录入时间）。
+DETAIL_WORDS = ("明细", "明细表", "明细数据", "数据表", "表格", "列表", "原始表")
 
 
 def _pick(text: str, table: list[tuple[str, tuple[str, ...]]]) -> str | None:
@@ -107,18 +112,19 @@ def rule_parse(text: str, ds: Dataset) -> ReportSpec | None:
     if not ys:
         ys = [c for c in num_cols if _mentions(text, c, True)]
 
-    # 认横轴：**只在文本列里找**。
-    #
-    # 这里以前是「先在文本列里找，找不到就退到所有列」，于是用户说
-    # 「按资产报酬率降序」，资产报酬率被抢去当了横轴；紧接着下面那句
-    # 「横轴不能等于数值」的保护又把它换成另一个指标 —— 用户想看的那个数
-    # 在图上一次都没出现，而且没有任何报错。指标永远只是指标，不当横轴。
-    x = _find_column(text, text_cols)
+    # 认横轴：从「维度候选」里找被点名的列。
+    # 维度候选 = 文本/日期列 + 低基数数值列（年份、月份、评分档这类「看着像数、
+    # 其实当维度用」的列，由 classify_columns 判定）。
+    # 好处：用户说「按年份统计销售额」，年份（数值型）也能被正确认成横轴，
+    # 而不是被当成指标；高基数数值（销售额、人数）永远进不了维度候选，
+    # 自然不会被抢去当横轴 —— 既「横轴纵轴指标都识别」，又守住指标不被挪用的底线。
+    dims = classify_columns(ds)["dimensions"]
+    x = _find_column(text, dims)
     if not x and not ys:
         # 一个指标都没提到，那用户指的可能是某一列本身（「按代码画条形图」）
         x = _find_column(text, cols)
     if not x:
-        x = text_cols[0] if text_cols else (cols[0] if cols else None)
+        x = dims[0] if dims else (cols[0] if cols else None)
 
     # 散点图是例外：横轴本来就该是另一个数值列
     if ctype == "scatter" and len(ys) >= 2:
@@ -147,6 +153,21 @@ def rule_parse(text: str, ds: Dataset) -> ReportSpec | None:
 
     m = re.search(r"(?:前|top|TOP)\s*(\d{1,3})", text)
     limit = int(m.group(1)) if m else None
+
+    # 明细表排序：只有点名了「明细 / 表格」这类词才排。
+    # 挑列的规则和图表排序一致 —— 取离排序词最近的那个被点名的列，
+    # 「明细按销售额和利润降序」里说的是利润，不是第一个。
+    detail_by, detail_order = "", "asc"
+    if any(w in text for w in DETAIL_WORDS):
+        pool = [c for c in cols if _mentions(text, c)] or \
+               [c for c in cols if _mentions(text, c, True)]
+        if pool:
+            if word:
+                pos = text.rfind(word)
+                detail_by = min(pool, key=lambda c: abs(text.find(c) - pos))
+                detail_order = order
+            else:
+                detail_by = pool[0]
 
     title_match = re.match(r"^(.{0,20}?)(?:的|之)?(?:图表|图|分析|报告)$", text)
     title = title_match.group(1) if title_match else (text[:20] or "数据分析")
@@ -224,5 +245,12 @@ def _spec_from_json(data: dict, ds: Dataset) -> ReportSpec | None:
     metrics = [m for m in (data.get("metrics") or []) if m in cols]
     if not metrics:
         metrics = charts[0].y[:4]
+    db = (data.get("detail_sort_by") or "").strip()
+    if db and db not in cols:
+        db = ""   # 模型编的列名不能信，拿不准就别排
+    dorder = str(data.get("detail_sort_order") or "asc").strip().lower()
+    if dorder not in ("asc", "desc"):
+        dorder = "asc"
     return ReportSpec(title=data.get("title") or "数据分析报告",
-                      charts=charts, metrics=metrics)
+                      charts=charts, metrics=metrics,
+                      detail_sort_by=db, detail_sort_order=dorder)

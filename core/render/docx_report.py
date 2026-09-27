@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+from ..analyze import detail_rows, detail_sort_label
 from ..model import Dataset, ReportSpec
 
 try:
@@ -60,17 +61,26 @@ def render_docx(datasets: list[Dataset], spec: ReportSpec,
             doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     if spec.template == "full":
+        note = detail_sort_label(spec, {c.name for d in datasets for c in d.columns})
         for ds in datasets:
             cols = ds.columns[:12]
             if not cols:
                 continue
-            head = ds.name if len(datasets) > 1 else "明细数据"
+            # 排序说明挂在标题里：Word 里没有「点表头排序」，不写清楚的话
+            # 读者会以为这张表是随便排的
+            head = (ds.name if len(datasets) > 1 else "明细数据") + (
+                f"（{note}）" if note else "")
             doc.add_heading(head, level=1)
             t = doc.add_table(rows=1, cols=len(cols))
             t.style = "Light Grid Accent 1"
+            sby = (getattr(spec, "detail_sort_by", "") or "").strip()
             for i, c in enumerate(cols):
-                t.rows[0].cells[i].text = c.name
-            for r in ds.rows[:200]:
+                mark = ""
+                if sby and c.name == sby:
+                    mark = " ↓" if str(getattr(spec, "detail_sort_order", "asc")
+                                       or "asc") == "desc" else " ↑"
+                t.rows[0].cells[i].text = c.name + mark
+            for r in detail_rows(ds, spec)[:200]:
                 cells = t.add_row().cells
                 for i, c in enumerate(cols):
                     v = r.get(c.name)

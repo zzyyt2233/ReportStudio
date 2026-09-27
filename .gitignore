@@ -39,10 +39,9 @@ config.local.yaml
 .env.*
 *.key
 
-# 注意：config.yaml 目前是干净的模板（api_key 为空）才留在仓库里。
-# 如果你打算往里填真实 key，请改成两步：
-#   1) 把 config.yaml 加进下面的忽略区
-#   2) 提交一份 config.example.yaml 作为模板
+# 注意：config.yaml 是「公共模板」，可以进仓库；密钥与私人设置请写 config.local.yaml，
+# 它已经在上面被忽略，所以把项目分享给别人时不会连着密钥一起发出去。
+# core/config.py 的读取顺序是 config.yaml → config.local.yaml，后者覆盖前者。
 
 # ---- 打包产物 ----
 build/

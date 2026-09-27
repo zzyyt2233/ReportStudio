@@ -48,14 +48,36 @@ def render_chart(agg: dict, spec: ChartSpec, out_path: str) -> str | None:
     # 这里只负责画，不自己判断 —— 否则网页版和导出件会各画各的。
     ctype = agg.get("effective_type") or spec.type
     # 百分比列底层是小数(0.125)，展示时乘 100 变成 12.5，配合轴标签的 %
-    scale = (lambda v: v * 100) if unit == "%" else (lambda v: v)
+    # 单位按**每个系列自己的**算：一张图里同时有销售额和毛利率时，
+    # 只取第一个指标的单位会让毛利率按 0.15 画出来、贴在 0 上。
+    def _u(name: str) -> str:
+        return (agg.get("units") or {}).get(name, unit) or ""
+
+    def _scale_for(name: str):
+        return (lambda v: v * 100) if _u(name) == "%" else (lambda v: v)
 
     def _yname(name: str) -> str:
-        if unit == "%":
+        u = _u(name)
+        if u == "%":
             return f"{name} (%)"
-        if unit:
-            return f"{name} ({unit})"
+        if u:
+            return f"{name} ({u})"
         return name
+
+    def _axis_label(names: list[str]) -> str:
+        """共用一根纵轴时把落在这根轴的指标都写上 —— 只写第一个会让人
+        以为整根轴都是那个指标的刻度。"""
+        parts: list[str] = []
+        for n in names:
+            t = _yname(n)
+            if t not in parts:
+                parts.append(t)
+        return " / ".join(parts)[:70]
+
+    def _only_pct(names: list[str]) -> bool:
+        return bool(names) and all(_u(n) == "%" for n in names)
+
+    scale = _scale_for(series[0]["name"]) if series else (lambda v: v)
 
     fig, ax = plt.subplots(figsize=(9, 4.2), dpi=160)
     fig.patch.set_facecolor("white")
@@ -84,6 +106,9 @@ def render_chart(agg: dict, spec: ChartSpec, out_path: str) -> str | None:
         width = 0.8 / max(n, 1)
         bottom = None
         use_dual = spec.dual_axis and n > 1
+        right_names = [s["name"] for i, s in enumerate(series) if use_dual and i > 0]
+        left_names = [s["name"] for i, s in enumerate(series)
+                      if not (use_dual and i > 0)]
         ax2 = ax.twinx() if use_dual else None
         if ax2 is not None:
             ax2.set_facecolor("white")
@@ -91,24 +116,29 @@ def render_chart(agg: dict, spec: ChartSpec, out_path: str) -> str | None:
             ax2.spines["top"].set_visible(False)
             ax2.spines["left"].set_visible(False)
             ax2.spines["right"].set_color(GRID)
-            ax2.set_ylabel(_yname("、".join(s["name"] for s in series[1:])[:40]),
-                           color=INK2, fontsize=10)
-            if unit == "%":
+            ax2.set_ylabel(_axis_label(right_names), color=INK2, fontsize=10)
+            if _only_pct(right_names):
                 ax2.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.1f}%"))
         for i, s in enumerate(series):
             target = ax2 if (use_dual and i > 0) else ax
+            # 和网页版共用同一套判定：每个指标各画各的形状
+            stype, stacked, area = spec.series_style(s["name"], i)
             xs = list(range(len(cats)))
             off = [x + (i - (n - 1) / 2) * width * 1.05 for x in xs]
-            kw = dict(label=s["name"], color=PALETTE[i % len(PALETTE)])
-            data = [scale(v) for v in s["data"]]
-            if ctype == "stack_bar":
+            color = PALETTE[i % len(PALETTE)]
+            kw = dict(label=s["name"], color=color)
+            # 这个系列自己的单位决定要不要 ×100
+            data = [_scale_for(s["name"])(v) for v in s["data"]]
+            if stype == "line":
+                target.plot(xs, data, marker="o", markersize=4,
+                            linewidth=1.8, **kw)
+                if area:
+                    target.fill_between(xs, data, color=color, alpha=.18)
+            elif stacked:
                 if bottom is None:
                     bottom = [0.0] * len(cats)
                 target.bar(xs, data, width=0.55, bottom=bottom, **kw)
                 bottom = [b + v for b, v in zip(bottom, data)]
-            elif ctype in ("line", "combo") and (i > 0 or ctype == "line"):
-                target.plot(xs, data, marker="o", markersize=4,
-                            linewidth=1.8, **kw)
             else:
                 target.bar(off, data, width=width, **kw)
         ax.set_xticks(list(range(len(cats))))
@@ -118,7 +148,7 @@ def render_chart(agg: dict, spec: ChartSpec, out_path: str) -> str | None:
                            fontsize=9, color=INK2)
         ax.grid(True, axis="y", color=GRID, linewidth=.7, alpha=.8)
         ax.set_axisbelow(True)
-        if unit == "%":
+        if _only_pct(left_names):
             ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.1f}%"))
         if n > 1 or use_dual:
             handles, labels = [], []
