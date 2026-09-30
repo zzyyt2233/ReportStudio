@@ -519,7 +519,15 @@ async def generate(payload: dict):
         groups = group_datasets(datasets)
         datasets = [merge_group(g) for g in groups]
 
+    # charts 里的元素必须是 dict，否则下面 c.items() 直接抛 AttributeError，
+    # 界面上就变成「服务端出错（AttributeError）」—— 用户看到的应该是
+    # 「配置不合法」，而不是一段内部异常。实测：charts:["柱状图"] 会走到这条路径。
     raw_charts = payload.get("charts") or []
+    if not isinstance(raw_charts, list):
+        raise HTTPException(400, "图表配置格式不对，应为数组")
+    # 顺手滤掉非 dict：前端永远传 dict，这里只挡手工调用 / 旧版前端，
+    # 滤掉后剩下的逻辑照旧降级成「数据摘要报告」，不会打断出报告。
+    raw_charts = [c for c in raw_charts if isinstance(c, dict)]
     charts = [ChartSpec(**{k: v for k, v in c.items()
                            if k in ChartSpec.__dataclass_fields__})
               for c in raw_charts]
@@ -1199,9 +1207,14 @@ def cleanup_residue(limit: int = 20) -> int:
     限量删除是为了不一次撞上批量删除守卫；删不掉的留着，下次再来。
     """
     n = 0
+    tried = 0
     for p in _residue_list():
-        if n >= limit:
+        # 上限用「尝试次数」而不是「成功次数」：环境拦下删除时成功数永远是 0，
+        # 拿成功数判断就会把整个残片列表（本机能到 1286 个）逐个试一遍 ——
+        # 界面上的「清理缓存」会长时间卡住，启动时更是要等它跑完。
+        if n >= limit or tried >= limit * 2:
             break
+        tried += 1
         if _purge(p):
             n += 1
     return n
@@ -1268,12 +1281,28 @@ if __name__ == "__main__":
 
     import uvicorn
 
-    n = cleanup_temp()
-    if n:
-        print(f"已清理 {n} 个过期上传缓存")
-    r = cleanup_residue()
-    if r:
-        print(f"已回收 {r} 个删除残片（*.deleted / *.tmp）")
+    # 清理放后台线程：它跟「把服务起来」没有任何关系，不该堵在启动路径上。
+    # 实测代价不小 —— 每个删除在某些环境下要走一遍守卫检查（本机 1~3 秒一个），
+    # 清 15 个上传缓存就花了 44 秒，同步跑的话双击启动要等这么久才看到页面。
+    def _cleanup_in_background():
+        try:
+            n = cleanup_temp()
+            # 残片能攒到上千个（本机实测 1286 个）。每轮限 20 个是为了不一次撞上
+            # 环境的批量删除守卫，但只跑一轮要重启六十多次才清完，这里多跑几轮。
+            r = 0
+            for _ in range(10):
+                got = cleanup_residue()
+                r += got
+                if got < 20:
+                    break
+            if n:
+                print(f"已清理 {n} 个过期上传缓存")
+            if r:
+                print(f"已回收 {r} 个删除残片（*.deleted / *.tmp）")
+        except Exception:  # noqa: BLE001
+            pass          # 清理失败不影响服务本身
+
+    threading.Thread(target=_cleanup_in_background, daemon=True).start()
     restored = _restore_session()
     if restored:
         print(f"已恢复上次会话的 {restored} 张数据表")

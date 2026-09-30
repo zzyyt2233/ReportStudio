@@ -62,9 +62,12 @@ input.num{width:72px}
 .fitem .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex:none}
 .fitem .dot.err{background:#E24B4A}
 .fitem .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
-.row{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.row{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
 .row label{font-size:12px;color:var(--ink2);flex:none;min-width:52px}
 .hint{font-size:12px;color:var(--ink3)}
+/* flex 行里的说明文字不给 flex:none 的话，列宽一紧就会被压到一个字宽，
+   整句竖着排成一列（右栏固定 384px 时最容易触发）。挤不下就整段换行。 */
+.row .hint{flex:0 0 auto;white-space:nowrap}
 .empty{color:var(--ink3);font-size:13px;padding:24px 0;text-align:center}
 .types{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
 .tchip{display:flex;align-items:center;gap:5px;font-size:12px;border:1px solid var(--line);
@@ -145,8 +148,10 @@ th{background:#F1EFE8;position:sticky;top:0;font-weight:500;color:#444441}
 
 /* —— 历史报告列表 ——
    两级布局：上一行「名称 · 时间 · 摘要」，下一行「文件链接 + 按钮」。
-   原来名称、时间、4 个文件链接、按钮全挤在一行，报告攒多了根本认不出谁是谁。 */
-.histlist{margin-top:8px}
+   原来名称、时间、4 个文件链接、按钮全挤在一行，报告攒多了根本认不出谁是谁。
+   限高 + 内部滚动：默认列 50 份，全展开时整页能被撑到 5600px 以上，
+   底下几节（看板、目录说明）得一直滚才能看见。 */
+.histlist{margin-top:8px;max-height:420px;overflow-y:auto}
 .hitem{display:flex;flex-direction:column;gap:5px;
  padding:8px 0;border-bottom:1px solid var(--line,#E5E3DC)}
 .hitem:last-child{border-bottom:none}
