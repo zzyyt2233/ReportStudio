@@ -1606,6 +1606,14 @@ if __name__ == "__main__":
 
     import uvicorn
 
+    from core import logsetup
+
+    # 双击启动时输出只打在黑窗口里，关掉就没了。复制一份进 logs/app.log，
+    # 超 5MB 自动归档 —— 用户报「打不开/闪退」时至少有东西可查。
+    # uvicorn 自己也是往 stderr 写的，跟着一起进文件。
+    logsetup.install()
+    logsetup.rotate_error_log()
+
     # 清理放后台线程：它跟「把服务起来」没有任何关系，不该堵在启动路径上。
     # 实测代价不小 —— 每个删除在某些环境下要走一遍守卫检查（本机 1~3 秒一个），
     # 清 15 个上传缓存就花了 44 秒，同步跑的话双击启动要等这么久才看到页面。

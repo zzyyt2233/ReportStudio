@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import itertools
 import os
+import shutil
 import sys
 import time
 
@@ -218,6 +219,20 @@ def remove_file(path: str) -> None:
             os.remove(path)
     except BaseException:
         pass
+
+
+def rmtree_quiet(path: str) -> bool:
+    """删目录，并且吞掉守卫抛出的 SystemExit。
+
+    受限环境拦下删除时抛的是 SystemExit —— `ignore_errors=True` 只认 OSError，
+    这个会直接穿出去，把测试进程的退出码变成 1，run_all 就把它判成 FAIL。
+    清理失败无非留点临时文件，不该算测试失败。
+    """
+    try:
+        shutil.rmtree(path, ignore_errors=True)
+    except BaseException:            # noqa: BLE001
+        return False
+    return not os.path.exists(path)
 
 
 def ok(label: str, cond: bool, detail: str = "") -> bool:

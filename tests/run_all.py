@@ -54,6 +54,7 @@ SUITES: list[tuple[str, list[str] | None, bool]] = [
     ("session_race_unit", ["tests/session_race_unit.py"], False),
     ("history_cleanup", ["tests/history_cleanup.py"], False),
     ("history_fp_cache", ["tests/history_fp_cache.py"], False),
+    ("log_rotate", ["tests/log_rotate.py"], False),
     ("image_recognize", ["tests/image_recognize.py"], False),
     ("race_safety", ["tests/race_safety.py"], False),
     ("concurrency", ["tests/concurrency.py"], False),
