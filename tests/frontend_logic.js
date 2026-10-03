@@ -103,10 +103,20 @@ window.fetch = async (url, opt) => {
                           missing: [], url: '/dashboards/_preview.html?_t=1' });
   }
   if (u.indexOf('/api/datasets') >= 0) return jsonResponse({ ok: true, items: [] });
-  if (u.indexOf('/api/history') >= 0) return jsonResponse({ ok: true, items: [] });
+  /* 注意顺序：'/api/history/cleanup' 要放在 '/api/history' 之前判断。
+     返回值可用 window.__CLEANUP_STUB / window.__HIST_STUB 注入，供存量管理断言用。 */
+  if (u.indexOf('/api/history/cleanup') >= 0) {
+    return jsonResponse(window.__CLEANUP_STUB ||
+      { ok: true, removed: 0, freed: 0, left: 0 });
+  }
+  if (u.indexOf('/api/history') >= 0) {
+    return jsonResponse(window.__HIST_STUB ||
+      { ok: true, items: [], total: 0, grand_total: 0, grand_size: 0 });
+  }
   return jsonResponse({ ok: true });
 };
 window.confirm = () => true;
+window.prompt = () => '90';
 window.alert = () => {};
 window.open = () => null;
 

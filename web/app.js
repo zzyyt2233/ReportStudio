@@ -80,7 +80,8 @@ function fmtSize(n) {
   if (!n) return '';
   if (n < 1024) return n + ' B';
   if (n < 1024 * 1024) return Math.round(n / 1024) + ' KB';
-  return (n / 1024 / 1024).toFixed(1) + ' MB';
+  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+  return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
 }
 
 /* 浏览器只认「用户手势」那一下的临时激活状态（Chrome 约 5 秒）。
@@ -1031,10 +1032,17 @@ async function renderHistory() {
   const items = res.items || [];
   const cnt = $('#histCount');
   if (cnt) {
-    cnt.textContent = !res.total ? ''
-      : (res.total > items.length ? `共 ${res.total} 份，显示 ${items.length} 份`
-                                  : `共 ${res.total} 份`);
+    // grand_* 是 outputs 里全部报告的份数和体积（服务端算的，不受搜索词影响）；
+    // 老后端没有这两个字段时退回 total，别显示成 0。
+    const gt = res.grand_total || res.total || 0;
+    const gs = res.grand_size || 0;
+    cnt.textContent = !gt ? ''
+      : `共 ${gt} 份${gs ? ' · ' + fmtSize(gs) : ''}`
+        + (res.total > items.length ? `，显示 ${items.length} 份` : '');
   }
+  // 按钮显隐要在提前 return 之前算：列表为空（全删光 / 刚装好）时
+  // 也得让清理按钮收起来，不然会停留在上一轮的旧状态
+  updateHistCleanBtn(res);
   box.textContent = '';
   if (!items.length) {
     const s = document.createElement('span');
@@ -1044,6 +1052,7 @@ async function renderHistory() {
     return;
   }
   items.forEach(it => box.appendChild(histItem(it)));
+  updateHistCleanBtn(res);
 }
 
 if ($('#refreshHist')) $('#refreshHist').onclick = renderHistory;
@@ -1090,6 +1099,57 @@ if ($('#cleanupBtn')) {
       btn.disabled = false;
     }
     await refreshResidue();
+  };
+}
+
+/* ---------- 旧报告批量清理 ----------
+   outputs 只进不出：报告越攒越多，1.8GB 的存量没有入口清。
+   和残片清理不同，这里删的是**正常报告**，不可逆——所以走三步：
+   先输入保留天数 → 服务端统计（不删）→ 弹确认框列出「将删 N 份 · X GB」
+   让用户点头，才真删。存量还小的时候不摆这个按钮，
+   没事摆一个「清理旧报告」只会让人怀疑是不是要动他的东西。 */
+function updateHistCleanBtn(res) {
+  const btn = $('#histCleanBtn');
+  if (!btn) return;
+  const gt = res.grand_total || 0, gs = res.grand_size || 0;
+  const worth = gt > 50 || gs > 100 * 1024 * 1024;
+  btn.hidden = !worth;
+  if (worth) {
+    const s = fmtSize(gs);
+    btn.textContent = s ? `清理旧报告（${s}）` : `清理旧报告（${gt} 份）`;
+  }
+}
+
+if ($('#histCleanBtn')) {
+  $('#histCleanBtn').onclick = async () => {
+    const input = prompt('清理多少天前的旧报告？（最少保留 7 天，建议 90）', '90');
+    if (input === null) return;
+    const days = parseInt(input, 10);
+    if (!days || days < 7) { toast('histMsg', '最少保留 7 天', true); return; }
+    const btn = $('#histCleanBtn');
+    // 先统计不删，把数摆出来让用户点头，再真删
+    const prev = await post('/api/history/cleanup', { days, apply: false })
+      .catch(e => ({ ok: false, error: String(e) }));
+    if (!prev.ok) { toast('histMsg', prev.error || '统计失败', true); return; }
+    if (!prev.removed) { toast('histMsg', `${days} 天以前没有旧报告，没什么可清的`); return; }
+    const sizeTxt = prev.freed ? '、约 ' + fmtSize(prev.freed) : '';
+    if (!confirm(`将删除 ${prev.removed} 份 ${days} 天前的旧报告${sizeTxt}，删掉无法恢复。确定吗？`)) return;
+    btn.disabled = true;
+    btn.textContent = '清理中…';
+    try {
+      const res = await post('/api/history/cleanup', { days, apply: true });
+      if (!res.ok) { toast('histMsg', res.error || '清理失败', true); return; }
+      let m = res.removed
+        ? `已清理 ${res.removed} 份旧报告，释放 ${fmtSize(res.freed) || '0 B'}`
+        : '没有可清理的旧报告';
+      if (res.left) m += `　还有 ${res.left} 份没删掉（可能正被占用，稍后再点一次）`;
+      toast('histMsg', m, !!res.left);
+    } catch (e) {
+      toast('histMsg', '清理出错：' + e, true);
+    } finally {
+      btn.disabled = false;
+    }
+    await renderHistory();
   };
 }
 

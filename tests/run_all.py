@@ -52,6 +52,7 @@ SUITES: list[tuple[str, list[str] | None, bool]] = [
     # 这类问题，其他套件全绿也照样可能存在。
     # 轮次由脚本自己按 --quick 减半。
     ("session_race_unit", ["tests/session_race_unit.py"], False),
+    ("history_cleanup", ["tests/history_cleanup.py"], False),
     ("race_safety", ["tests/race_safety.py"], False),
     ("concurrency", ["tests/concurrency.py"], False),
     ("no500", ["tests/no500.py"], True),

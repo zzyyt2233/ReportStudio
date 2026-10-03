@@ -15,7 +15,7 @@ import time
 import traceback
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # 免安装包里用的是嵌入式 Python，它按 python313._pth 决定模块搜索路径，
@@ -340,6 +340,28 @@ def clear_session():
     return {"ok": True, "removed": n}
 
 
+def _cleanup_residue_by_budget(seconds: float, batch: int = 20) -> int:
+    """按时间预算回收残片，清完或预算用光就停。
+
+    cleanup_residue 的 limit 参数按个数限，单次调用最多删 limit 个。
+    之前积压 1273 个时无论启动还是按钮都只能一次推 200 个，
+    要连续按 7 次才消化完。改成时间预算制：真实环境（删除不被拦）
+    一次就能清完；受限环境（每个删除要走 1~3 秒守卫检查）也能尽量推进，
+    每轮仍是 batch 个的小批量，不会撞批量删除守卫。
+
+    got == 0 就停：要么真清完了，要么每个都删不动（tried 上限触发），
+    继续死磕只是白烧时间。
+    """
+    deadline = time.monotonic() + seconds
+    total = 0
+    while time.monotonic() < deadline:
+        got = cleanup_residue(limit=batch)
+        total += got
+        if got == 0:
+            break
+    return total
+
+
 @app.post("/api/cleanup")
 def cleanup_now():
     """用户主动触发的残片回收。
@@ -348,9 +370,12 @@ def cleanup_now():
     用户想马上腾地方时不该被一句「重启服务」挡回去。
     清的全是**确定不会再被读**的东西 —— *.deleted、过期的 *.tmp、会话回收站；
     正常报告、看板配置、会话数据一律不碰。
+
+    预算 10 秒而不是 45：这是用户点着按钮在等的请求，等太久像卡死。
+    10 秒内删不完的会在响应里如实报告剩余数量，再点一次继续。
     """
     before = residue_stat()
-    n = cleanup_residue(limit=200)
+    n = _cleanup_residue_by_budget(10.0)
     after = residue_stat()
     return {"ok": True, "removed": n,
             "freed": max(0, before["size"] - after["size"]),
@@ -988,6 +1013,57 @@ def _split_stamp(name: str) -> tuple[str, str]:
         return m.group(1), f"{m.group(2)} {m.group(3)}"
 
 
+# ——— 历史报告列表的缓存 ———
+# 为什么需要：1640 份报告时 /api/history 全扫要 240ms——每个目录 4 次 stat
+# （report.html/md/docx/pdf 存在性）+ 列出的 50 个目录各一次全目录 walk 算体积。
+# 这些信息在报告生成后基本不变，按目录 mtime 缓存后重复请求只剩
+# listdir + 每目录一次 getmtime。
+# mtime 的精度够用：报告目录里唯一会发生的后续写入是导出 docx/pdf，
+# 新增文件会更新目录 mtime，缓存自动失效重建。
+_HIST_CACHE: dict[str, dict] = {}     # 目录名 -> {"mtime": float, "entry": dict}
+
+
+def _history_entry(name: str, d: str) -> dict | None:
+    """构建（或取缓存的）一个报告目录的列表条目。不是报告返回 None。"""
+    try:
+        mtime = os.path.getmtime(d)
+    except OSError:
+        return None
+    with _LOCK:
+        c = _HIST_CACHE.get(name)
+        if c and c["mtime"] == mtime:
+            return c["entry"]
+    # 构建部分（stat + walk）在锁外跑，别堵住别的请求
+    files = {}
+    for fn in ("report.html", "report.md", "report.docx", "report.pdf"):
+        p = os.path.join(d, fn)
+        if os.path.exists(p):
+            files[fn] = {"size": os.path.getsize(p),
+                         "mtime": datetime.fromtimestamp(
+                             os.path.getmtime(p)).strftime("%m-%d %H:%M")}
+    # 没有 report.* 的目录不算报告（例如导出数据表用的 _exports）
+    if not files:
+        return None
+    rname, stamp = _split_stamp(name)
+    rel = os.path.relpath(d, ROOT).replace("\\", "/")
+    entry = {
+        "dir": d,
+        "name": rname,
+        "stamp": stamp,
+        "files": {k: {"url": f"/{rel}/{k}", **v} for k, v in files.items()},
+        "meta": _read_meta(d),
+        "size": _dir_size(d),
+    }
+    with _LOCK:
+        _HIST_CACHE[name] = {"mtime": mtime, "entry": entry}
+    return entry
+
+
+def _hist_cache_drop(name: str) -> None:
+    with _LOCK:
+        _HIST_CACHE.pop(name, None)
+
+
 @app.get("/api/history")
 def history(q: str = "", limit: int = 50):
     """列出 outputs 下已有的报告，可以回看、重新导出、删除。
@@ -1004,6 +1080,10 @@ def history(q: str = "", limit: int = 50):
         limit = 50
 
     items, matched = [], 0
+    # grand_* 是「outputs 里全部报告」的份数和体积，不受 q 过滤影响——
+    # 前端要在搜索时也显示「共 1640 份 · 1.8 GB」，不然用户搜的时候
+    # 看不出来存量到底有多大，也就想不到去清理。
+    grand_total = grand_size = 0
     for name in sorted(os.listdir(OUT_DIR), reverse=True):
         # *.deleted / *.tmp 是删除或写入被中断后的残片，不该被当成报告列出来
         if name.endswith(".deleted") or name.endswith(".tmp"):
@@ -1011,32 +1091,21 @@ def history(q: str = "", limit: int = 50):
         d = os.path.join(OUT_DIR, name)
         if not os.path.isdir(d):
             continue
-        files = {}
-        for fn in ("report.html", "report.md", "report.docx", "report.pdf"):
-            p = os.path.join(d, fn)
-            if os.path.exists(p):
-                files[fn] = {"size": os.path.getsize(p),
-                             "mtime": datetime.fromtimestamp(
-                                 os.path.getmtime(p)).strftime("%m-%d %H:%M")}
-        # 没有 report.* 的目录不算报告（例如导出数据表用的 _exports）
-        if not files:
+        entry = _history_entry(name, d)
+        if entry is None:
+            # 目录还在但已经不是报告了（或刚被删）——顺手把陈旧缓存清掉
+            _hist_cache_drop(name)
             continue
-        rname, stamp = _split_stamp(name)
-        if kw and kw not in name.lower() and kw not in rname.lower():
+        grand_total += 1
+        grand_size += entry.get("size", 0)
+        if kw and kw not in name.lower() and kw not in entry["name"].lower():
             continue
         matched += 1
         if len(items) >= limit:
             continue          # 已经够了，但继续数 matched，好让前端说「共 N 份」
-        rel = os.path.relpath(d, ROOT).replace("\\", "/")
-        items.append({
-            "dir": d,
-            "name": rname,
-            "stamp": stamp,
-            "files": {k: {"url": f"/{rel}/{k}", **v} for k, v in files.items()},
-            "meta": _read_meta(d),
-            "size": _dir_size(d),
-        })
-    return {"items": items, "total": matched, "filtered": bool(kw)}
+        items.append(entry)
+    return {"items": items, "total": matched, "filtered": bool(kw),
+            "grand_total": grand_total, "grand_size": grand_size}
 
 
 @app.delete("/api/history")
@@ -1060,9 +1129,76 @@ def history_delete(dir: str = ""):
         return {"ok": False, "error": "这份报告已经不在了"}
     with _LOCK:
         REPORTS.pop(_report_key(dir), None)   # 顺手清掉导出用的注册表，免得占内存
+        _HIST_CACHE.pop(os.path.basename(target), None)   # 列表缓存同步清
     ok = _rm_dir(target)
     return {"ok": ok,
             "error": "" if ok else "删除失败（目录可能正被占用：关掉预览它的窗口再试）"}
+
+
+_STAMP_RE = re.compile(r"^(.*)_(\d{8})_(\d{6})$")
+
+
+@app.post("/api/history/cleanup")
+def history_cleanup(payload: dict):
+    """按天数批量清理旧报告。
+
+    两步走：apply=False 只统计不删，前端拿这个数弹确认框；
+    apply=True 才真删。删报告不可逆，必须让用户在看到
+    「将删 N 份 · X GB」之后自己点头，不能一个按钮直接删。
+
+    安全线：
+    - days 下限 7 天——低于这个误删刚生成的报告的风险，比省下的空间值钱；
+    - 只碰目录名带标准时间戳的目录，没有时间戳的（老格式 / 手动建的）一律不动，
+      宁可留着也不能误删；
+    - 60 秒时间预算：存量上千份时全删完可能要几分钟，超预算就停，
+      把没处理到的留在 left 里让用户再点一次。
+    """
+    try:
+        days = int(payload.get("days") or 0)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "天数得是个数字"}
+    if days < 7:
+        return {"ok": False, "error": "最少保留 7 天——时间太近的报告不该被批量清掉"}
+    apply = bool(payload.get("apply"))
+    cut = datetime.now() - timedelta(days=days)
+    if not os.path.isdir(OUT_DIR):
+        return {"ok": True, "removed": 0, "freed": 0, "left": 0}
+
+    removed = freed = 0
+    left = 0
+    deadline = time.monotonic() + 60.0
+    for name in os.listdir(OUT_DIR):
+        if name.endswith(".deleted") or name.endswith(".tmp"):
+            continue
+        d = os.path.join(OUT_DIR, name)
+        if not os.path.isdir(d):
+            continue
+        m = _STAMP_RE.match(name)
+        if not m:
+            continue
+        try:
+            dt = datetime.strptime(m.group(2) + m.group(3), "%Y%m%d%H%M%S")
+        except ValueError:
+            continue
+        if dt >= cut:
+            continue
+        if time.monotonic() > deadline:
+            left += 1        # 预算用光，剩下的这轮不碰
+            continue
+        size = _dir_size(d)
+        if not apply:
+            removed += 1
+            freed += size
+            continue
+        if _rm_dir(d):
+            removed += 1
+            freed += size
+            with _LOCK:
+                _HIST_CACHE.pop(name, None)
+                REPORTS.pop(_report_key(d), None)
+        else:
+            left += 1
+    return {"ok": True, "removed": removed, "freed": freed, "left": left}
 
 
 @app.post("/api/export_dataset")
@@ -1425,14 +1561,10 @@ if __name__ == "__main__":
     def _cleanup_in_background():
         try:
             n = cleanup_temp()
-            # 残片能攒到上千个（本机实测 1286 个）。每轮限 20 个是为了不一次撞上
-            # 环境的批量删除守卫，但只跑一轮要重启六十多次才清完，这里多跑几轮。
-            r = 0
-            for _ in range(10):
-                got = cleanup_residue()
-                r += got
-                if got < 20:
-                    break
+            # 残片按 45 秒时间预算清（见 _cleanup_residue_by_budget 的说明）。
+            # 之前固定 10 轮 × 20 个 = 一次启动最多推 200 个，
+            # 积压 1273 个时要重启 7 次才消化得完。
+            r = _cleanup_residue_by_budget(45.0)
             if n:
                 print(f"已清理 {n} 个过期上传缓存")
             if r:
