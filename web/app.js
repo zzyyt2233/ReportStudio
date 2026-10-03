@@ -171,6 +171,10 @@ async function restoreSession() {
 
 /* ---------- 步骤 1：导入 ---------- */
 $('#drop').onclick = () => $('#file').click();
+// 拖放区是 role=button 的 div：回车 / 空格也要能打开文件选择框（键盘可达）
+$('#drop').onkeydown = (e) => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('#file').click(); }
+};
 $('#folderBtn').onclick = () => $('#folder').click();
 
 const dz = $('#drop');
@@ -216,7 +220,7 @@ function renderFiles() {
     el.innerHTML = `<span class="dot ${bad}"></span>
       <span class="nm">${esc(ds.name)}</span>
       <span class="src">${esc(ds.source_type)} · ${ds.total_rows} 行 · ${ds.columns.length} 列</span>
-      <span class="rm" data-id="${ds.id}">×</span>`;
+      <button class="rm" data-id="${ds.id}" aria-label="移除数据表 ${esc(ds.name)}">×</button>`;
     box.appendChild(el);
   });
   $$('#files .rm').forEach(x => x.onclick = async () => {
@@ -415,7 +419,7 @@ function addChartCard(spec) {
   el.className = 'chart-card';
   el.dataset.id = id;
   el.innerHTML = `
-    <div class="hd"><span>图表</span><span class="x">×</span></div>
+    <div class="hd"><span>图表</span><button type="button" class="x" aria-label="删除这张图表">×</button></div>
     <div class="row"><label>类型</label><select class="c-type">
       ${CHART_TYPES.map(t => `<option value="${t[0]}"${t[0] === (spec.type || 'bar') ? ' selected' : ''}>${t[1]}</option>`).join('')}
     </select><span class="hint">默认图型；每个指标可在下面单独改</span></div>
@@ -477,10 +481,13 @@ function fillChartCard(el, ds, spec) {
   if (!ys.length) ys = nums.slice(0, 1);
   const mea = new Set(roles.measures || []);
   el.querySelector('.c-y').innerHTML = nums.map(n =>
-    `<span class="chip${ys.indexOf(n) >= 0 ? ' on' : ''}" data-n="${esc(n)}" title="${mea.has(n) ? '度量（纵轴候选）' : ''}">${esc(n)}</span>`).join('') ||
+    `<button type="button" class="chip${ys.indexOf(n) >= 0 ? ' on' : ''}" data-n="${esc(n)}"
+      aria-pressed="${ys.indexOf(n) >= 0 ? 'true' : 'false'}"
+      title="${mea.has(n) ? '度量（纵轴候选）' : ''}">${esc(n)}</button>`).join('') ||
     '<span class="hint">勾选数值列作为纵轴指标（度量）</span>';
-  $$('.c-y .chip', el).forEach(c => c && (c.onclick = () => {
+  const toggleChip = (c) => {
     c.classList.toggle('on');
+    c.setAttribute('aria-pressed', c.classList.contains('on') ? 'true' : 'false');
     // 勾掉/勾上一个数列，可选的排序项就变了；不刷新的话排序下拉是过期的，
     // 用户会觉得「按这个指标降序」根本选不出来。
     refreshSortOptions(el);
@@ -488,7 +495,10 @@ function fillChartCard(el, ds, spec) {
     refreshDualVisibility(el);
     refreshSplitVisibility(el);
     scheduleSaveDraft();
-  }));
+  };
+  $$('.c-y .chip', el).forEach(c => c && (c.onclick = () => toggleChip(c)));
+  // chip 是 role=button 的真按钮：键盘回车/空格由浏览器触发 click，无需额外绑定。
+  // aria-pressed 让读屏软件知道它是可切换的，勾没勾上听得到。
   el.querySelector('.c-dir').value = spec.sort_order || 'asc';
   el.querySelector('.c-limit').value = spec.limit || '';
   el.querySelector('.c-span').value = String(spec.span || 6);
@@ -824,7 +834,11 @@ document.addEventListener('keydown', (e) => {
    重算，和刚打开的看板不是同一份东西）。 */
 function switchTab(v) {
   curView = v;
-  $$('.vtab').forEach(b => b.classList.toggle('on', b.dataset.view === v));
+  $$('.vtab').forEach(b => {
+    const on = b.dataset.view === v;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');  // 读屏需要，光有样式不算选中态
+  });
   $('#actsReport').hidden = v !== 'report';
   $('#actsDash').hidden = v === 'report';
 }
@@ -1368,7 +1382,17 @@ function renderDbTables(tables) {
     el.innerHTML = '<span class="dot' + (t.type === 'view' ? ' warn' : '') + '"></span>'
       + '<span class="nm">' + esc(t.schema ? t.schema + '.' + t.name : t.name) + '</span>'
       + '<span class="src">' + (t.type === 'view' ? '视图' : '表') + '</span>';
+    // 整行可点选：没有 tabindex 的话键盘用户进不来（WCAG 2.1.1）
+    el.setAttribute('role', 'button');
+    el.tabIndex = 0;
+    // aria-label 里剥掉 <>&"：setAttribute 虽不会执行脚本，
+    // 但别把恶意字符带进可访问名（也保住 XSS 回归断言的口径）
+    const safeName = (t.schema ? t.schema + '.' : '') + t.name;
+    el.setAttribute('aria-label', '选用表 ' + safeName.replace(/[<>&"]/g, ''));
     el.onclick = () => dbPickTable(t);
+    el.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); dbPickTable(t); }
+    };
     box.appendChild(el);
   });
 }

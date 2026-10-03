@@ -1,9 +1,19 @@
 :root{
-  --bg:#F5F5F2; --card:#FFFFFF; --ink:#2C2C2A; --ink2:#5F5E5A; --ink3:#888780;
+  --bg:#F5F5F2; --card:#FFFFFF; --ink:#2C2C2A; --ink2:#5F5E5A; --ink3:#67665F;
   --line:#E3E1D9; --accent:#185FA5; --accent-soft:#E6F1FB; --warn:#FAEEDA;
   --warn-line:#FAC775; --ok:#E1F5EE; --ok-line:#9FE1CB;
 }
+/* --ink3 从 #888780 加深到 #67665F：旧值在白底上只有约 3.4:1，
+   大量 11~12px 的说明文字用它，WCAG 2.2 AA（1.4.3）要求正文 4.5:1。
+   #67665F 在白底约 5.2:1、在 #FAFAF8 上约 5.0:1，小字也够。 */
 *{box-sizing:border-box}
+/* 键盘焦点必须一眼看得见（WCAG 2.4.7 / 2.4.11）。
+   只对键盘导航（:focus-visible）生效，鼠标点击不会多出一圈。 */
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+/* 系统开了「减少动态效果」时停掉所有过渡与动画（2.3.3） */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{transition:none !important;animation:none !important;scroll-behavior:auto !important}
+}
 /* hidden 属性必须真的能藏住元素。
    浏览器默认样式里的 [hidden]{display:none} 属于 **UA 样式表**，作者样式表里
    任何一条 display 规则都会把它压掉（跟优先级无关，作者样式总是赢）。
@@ -16,7 +26,8 @@ body{margin:0;background:var(--bg);color:var(--ink);
   font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;font-size:14px;line-height:1.6}
 .top{display:flex;align-items:baseline;gap:14px;padding:16px 24px;background:var(--card);
   border-bottom:1px solid var(--line)}
-.brand{font-size:17px;font-weight:500}
+.brand{font-size:17px;font-weight:500;margin:0}
+/* h1 默认的上边距会把 header 撑高一截，压掉 */
 .sub{color:var(--ink2);font-size:12px}
 /* 三列各自独立堆叠：每列一个 .col 容器，列内 panel 依次排列。
    不让 6 个 panel 直接当 grid item —— 那样同行会被拉齐到同一高度，
@@ -32,8 +43,8 @@ body{margin:0;background:var(--bg);color:var(--ink);
   .col{display:contents}
 }
 .panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
-.panel h3{margin:0 0 12px;font-size:14px;font-weight:500;color:var(--ink)}
-h3::before{content:"";display:inline-block;width:3px;height:13px;background:var(--accent);
+.panel h2{margin:0 0 12px;font-size:14px;font-weight:500;color:var(--ink)}
+.panel h2::before{content:"";display:inline-block;width:3px;height:13px;background:var(--accent);
   margin-right:8px;vertical-align:-1px;border-radius:2px}
 .drop{border:1.5px dashed var(--line);border-radius:10px;padding:18px 12px;text-align:center;
   cursor:pointer;transition:.15s;background:#FAFAF8}
@@ -84,12 +95,16 @@ th{background:#F1EFE8;position:sticky;top:0;font-weight:500;color:#444441}
   background:#FAFAF8}
 .chart-card .hd{display:flex;justify-content:space-between;align-items:center;
   margin-bottom:8px;font-size:12px;color:var(--ink2)}
-.chart-card .hd .x{cursor:pointer;color:var(--ink3);padding:0 4px}
+/* 图表卡右上角的 × 从 span 换成了 button（键盘可达），还原成原来的小叉外观 */
+.chart-card .hd .x{appearance:none;border:none;background:none;cursor:pointer;
+  color:var(--ink3);padding:0;min-width:24px;min-height:24px;line-height:1;border-radius:6px}
 .chart-card .row{margin-bottom:7px}
 .chart-card .row label{min-width:44px}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chip{border:1px solid var(--line);border-radius:16px;padding:2px 10px;font-size:12px;
-  cursor:pointer;background:#fff;color:var(--ink2)}
+  cursor:pointer;background:#fff;color:var(--ink2);min-height:24px;font-family:inherit}
+/* 指标 chip 有了 role=button，键盘聚焦时给一圈描边（全局 :focus-visible 也会兜） */
+.chip:focus-visible{border-color:var(--accent)}
 .chip.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
 /* —— 每个指标单独的图型 ——
    对齐方式和卡片里其它行一致（label 列 min-width 44px），
@@ -132,9 +147,12 @@ th{background:#F1EFE8;position:sticky;top:0;font-weight:500;color:#444441}
 .btns-row{display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap}
 .btns-row .hint{margin:0}
 .fitem .dot.warn{background:#EF9F27}
-.fitem .src{font-size:11px;color:#888780;margin-left:6px}
-.fitem.off{opacity:.45;text-decoration:line-through}
-.fitem .rm{margin-left:auto;cursor:pointer;color:#888780;font-size:14px;padding:0 2px}
+.fitem .src{font-size:11px;color:var(--ink3);margin-left:6px}
+.fitem.off{opacity:.6;text-decoration:line-through}
+/* .rm 从 span 换成了 button（键盘可达 + 语义正确），把按钮默认样式还原成原来的小叉 */
+.fitem .rm{appearance:none;border:none;background:none;min-width:24px;min-height:24px;
+  line-height:1;border-radius:6px}
+.fitem .rm{margin-left:auto;cursor:pointer;color:var(--ink3);font-size:14px;padding:0 2px}
 .fitem .rm:hover{color:#A32D2D}
 .types{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
 .tchip select{font-size:12px}
