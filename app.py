@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sys
 import threading
 import time
@@ -966,33 +967,40 @@ def _rm_dir(path: str) -> bool:
     受限环境里 shutil.rmtree 会被批量删除守卫直接拦下，所以准备了三层降级：
     整体删 → 逐个文件删再删空目录 → 整目录改名成 *.deleted。
     最后一层至少能让它从列表里消失，目录本体由启动时的 cleanup_residue 回收。
+
+    异常不再静默吞掉，全部打进日志：如果失败是环境级的（沙箱 / 安全软件的
+    批量删除守卫），日志里一眼可辨；吞掉的话只剩「可能正被占用」，
+    谁也排查不了。实测就有过：服务在受限会话里启动，删一份 30 张图的报告
+    被守卫拦了 30 次，日志里全是拦截记录。
     """
-    import shutil
+    import logging
+    log = logging.getLogger("rs.rmdir")
     try:
         shutil.rmtree(path)
         return True
-    except BaseException:
-        pass
+    except BaseException as e:
+        log.warning("rmtree %s 失败: %r", path, e)
     try:
         for root, dirs, files in os.walk(path, topdown=False):
             for fn in files:
                 try:
                     os.remove(os.path.join(root, fn))
-                except BaseException:
-                    pass
+                except BaseException as e:
+                    log.warning("remove %s 失败: %r", os.path.join(root, fn), e)
             for dn in dirs:
                 try:
                     os.rmdir(os.path.join(root, dn))
-                except BaseException:
-                    pass
+                except BaseException as e:
+                    log.warning("rmdir %s 失败: %r", os.path.join(root, dn), e)
         os.rmdir(path)
         return True
-    except BaseException:
-        pass
+    except BaseException as e:
+        log.warning("逐个删 %s 仍失败: %r", path, e)
     try:
         os.rename(path, path + ".deleted")
         return True
-    except BaseException:
+    except BaseException as e:
+        log.warning("改名 %s 也失败: %r", path, e)
         return False
 
 
