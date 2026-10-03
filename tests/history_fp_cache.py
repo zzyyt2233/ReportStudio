@@ -8,6 +8,7 @@
 import json
 import os
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -39,10 +40,11 @@ def _mk_report(out, name, title="测试报告"):
 
 
 def main():
-    tmp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                       "temp", "hist_fp_cache")
-    rmtree_quiet(tmp)
-    os.makedirs(tmp)
+    # 每次开新目录：上一轮的残留可能删不掉（受限环境的删除守卫按额度拦），
+    # 固定目录名会让「报告数 = 2」这类断言被上一次的残留污染。
+    base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
+    os.makedirs(base, exist_ok=True)
+    tmp = tempfile.mkdtemp(prefix="hist_fp_cache_", dir=base)
     old_out = app_mod.OUT_DIR
     app_mod.OUT_DIR = tmp
     app_mod._HIST_CACHE.clear()

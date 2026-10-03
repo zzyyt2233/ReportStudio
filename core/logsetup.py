@@ -20,12 +20,18 @@ KEEP = 3
 
 
 def rotate(path, max_bytes: int = MAX_BYTES, keep: int = KEEP) -> None:
-    """归档写满的日志。调用前该文件必须已经关闭。"""
+    """归档写满的日志。调用前该文件必须已经关闭。
+
+    这里的异常一律吞掉，而且捕的是 BaseException 而不是 OSError ——
+    受限环境（比如某些沙箱）拦下删除时抛的是 SystemExit，那玩意儿不是
+    OSError 的子类，只捕 OSError 会让它直接穿出去，把整个服务带走。
+    归档失败大不了不归档，继续往原文件写。
+    """
     p = pathlib.Path(path)
     try:
         if not p.exists() or p.stat().st_size < max_bytes:
             return
-    except OSError:
+    except BaseException:            # noqa: BLE001
         return
 
     stem, suffix = p.stem, p.suffix
@@ -33,8 +39,8 @@ def rotate(path, max_bytes: int = MAX_BYTES, keep: int = KEEP) -> None:
         oldest = p.with_name(f"{stem}.{keep}{suffix}")
         if oldest.exists():
             oldest.unlink()
-    except OSError:
-        pass
+    except BaseException:            # noqa: BLE001
+        return                       # 连最老的都删不掉，后面几步必然也做不成
 
     for i in range(keep - 1, 0, -1):
         src = p.with_name(f"{stem}.{i}{suffix}")
@@ -42,12 +48,12 @@ def rotate(path, max_bytes: int = MAX_BYTES, keep: int = KEEP) -> None:
             continue
         try:
             src.replace(p.with_name(f"{stem}.{i + 1}{suffix}"))
-        except OSError:
+        except BaseException:        # noqa: BLE001
             pass
 
     try:
         p.replace(p.with_name(f"{stem}.1{suffix}"))
-    except OSError:
+    except BaseException:            # noqa: BLE001
         pass
 
 
