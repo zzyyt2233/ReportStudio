@@ -24,6 +24,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # (名字, 命令, 是否慢)  —— 命令为 None 表示用 node 跑
 SUITES: list[tuple[str, list[str] | None, bool]] = [
+    # 放最前：归档验证要先删掉最老的那份备份，而受限环境的删除额度是按 turn
+    # 累计的，排到后面会被前面的套件用光（同下面 history_export 那条注释）。
+    ("log_rotate", ["tests/log_rotate.py"], False),
     ("smoke", ["tests/smoke.py"], False),
     ("compat", ["tests/compat.py"], False),
     ("missing_value", ["tests/missing_value.py"], False),
@@ -39,6 +42,7 @@ SUITES: list[tuple[str, list[str] | None, bool]] = [
     ("pie_negative", ["tests/pie_negative.py"], False),
     ("per_metric_type", ["tests/per_metric_type.py"], False),
     ("detail_sort", ["tests/detail_sort.py"], False),
+    ("demo_data", ["tests/demo_data.py"], False),
     ("pdf_extract", ["tests/pdf_extract.py"], False),
     ("vision_config", ["tests/vision_config.py"], False),
     ("axis_recognize", ["tests/axis_recognize.py"], False),
@@ -54,7 +58,7 @@ SUITES: list[tuple[str, list[str] | None, bool]] = [
     ("session_race_unit", ["tests/session_race_unit.py"], False),
     ("history_cleanup", ["tests/history_cleanup.py"], False),
     ("history_fp_cache", ["tests/history_fp_cache.py"], False),
-    ("log_rotate", ["tests/log_rotate.py"], False),
+    ("secret_store", ["tests/secret_store.py"], False),
     ("image_recognize", ["tests/image_recognize.py"], False),
     ("race_safety", ["tests/race_safety.py"], False),
     ("concurrency", ["tests/concurrency.py"], False),
