@@ -540,7 +540,7 @@ function fillChartCard(el, ds, spec) {
               : (dims.indexOf(all[0]) >= 0 ? all[0] : (dims[0] || all[0]));
   x.innerHTML = xOptions(ds, dims, roles.measures || [], wantX);
   let ys = (spec.y || []).filter(n => nums.indexOf(n) >= 0);
-  if (!ys.length) ys = nums.slice(0, 1);
+  if (!ys.length) ys = defaultYs(ds, nums);
   const mea = new Set(roles.measures || []);
   el.querySelector('.c-y').innerHTML = nums.map(n =>
     `<button type="button" class="chip${ys.indexOf(n) >= 0 ? ' on' : ''}" data-n="${esc(n)}"
@@ -588,6 +588,14 @@ function rolesOf(ds) {
     dimensions: cols.filter(c => c.dtype !== 'number').map(c => c.name),
     measures: cols.filter(c => c.dtype === 'number').map(c => c.name),
   };
+}
+
+/* 没指定指标时的默认勾选。图片识别出的多系列图表，系列本身就是用户想要的
+   指标，默认全带上（至多 4 个，再多图也没法看）；普通表格数值列可能十几列，
+   全选没法看，只带第一个。 */
+function defaultYs(ds, nums) {
+  if (ds && ds.source_type === 'image') return nums.slice(0, 4);
+  return nums.slice(0, 1);
 }
 
 /* 横轴下拉：维度候选（推荐）与度量候选分组标注。

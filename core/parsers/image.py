@@ -21,18 +21,24 @@ SUPPORTED = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 
 EXTRACT_SYSTEM = "你是一个精确的数据提取助手，只输出 JSON。"
 
-VISION_PROMPT = """请识别这张图片里的表格或数据，输出 JSON：
+VISION_PROMPT = """请识别这张图片里的数据，输出 JSON：
 {
   "title": "图片标题（没有就空字符串）",
   "note": "一句话说明数据口径、单位或时间范围（没有就空字符串）",
+  "x_axis": "仅当图片是图表（柱状图/折线图/饼图等）时填横轴标题，否则空字符串",
+  "series": ["仅图表时填：图例中的系列名，与 header 除第一列外的列一一对应"],
   "header": ["列1", "列2"],
   "rows": [["值1", "值2"]]
 }
 规则：
-1. 只输出图片里真实存在的数字和文字，禁止推测、补全、单位换算
-2. 表头用原文，不要改写
-3. 若图片中不是表格（比如柱状图），就按图例和坐标轴刻度整理成表格
-4. 读不出数据时返回 {"title":"","note":"","header":[],"rows":[]}"""
+1. 只输出图片里真实存在的数字和文字，禁止推测、补全
+2. 图片是表格：表头用原文不改写，各行原样抽取
+3. 图片是图表（柱状/折线/饼图等）：横轴类目作为第一列，列名用横轴标题
+   （没有标题就叫「类目」）；每个图例系列各占一列，列名用图例原文
+   （单系列没有图例时用「数值」）；饼图整理成「类目 / 数值」两列
+4. 数值单元格只写数字本身（千分位逗号可保留），单位、% 写进 note；
+   图表读数来自刻度估读，note 里注明「数值为图上估读」
+5. 读不出数据时返回 {"title":"","note":"","x_axis":"","series":[],"header":[],"rows":[]}"""
 
 
 def _ocr_text(path: str) -> str | None:
@@ -82,9 +88,14 @@ def parse_image(path: str) -> Dataset:
     try:
         from ..llm import vision
         data = vision(path, VISION_PROMPT, want_json=True)
-        header = data.get("header") or []
+        header = [str(h) for h in (data.get("header") or [])]
         rows = data.get("rows") or []
         if header and rows:
+            # 图表图：模型认出了横轴标题但第一列表头写得很泛，换成真实轴名 ——
+            # 列名是图表配置里横轴下拉的显示名，「类目」这种词用户认不出是哪来的。
+            x_axis = str(data.get("x_axis") or "").strip()
+            if x_axis and header[0].strip() in ("", "类目", "项目", "类别", "名称"):
+                header[0] = x_axis
             from .tabular import build_dataset
             grid = [list(header)] + [list(r) for r in rows]
             ds = build_dataset(grid, name=data.get("title") or name,

@@ -412,5 +412,22 @@ window.__runAsserts = (async function () {
   ok($('#histMsg').textContent.indexOf('已清理 30 份') === 0,
      'toast 汇报清理结果和释放量（实际 ' + $('#histMsg').textContent + '）');
 
+  // 21 · 图片识别数据集的默认指标：多系列全带上，普通表格只带第一个
+  const imgDs = { source_type: 'image',
+                  columns: [{ name: '月份', dtype: 'text' },
+                            { name: '销售额', dtype: 'number' },
+                            { name: '利润', dtype: 'number' },
+                            { name: '成本', dtype: 'number' }] };
+  ok(JSON.stringify(defaultYs(imgDs, ['销售额', '利润', '成本'])) ===
+     JSON.stringify(['销售额', '利润', '成本']),
+     '图片识别的多系列图表默认勾选全部系列');
+  const imgDs5 = { source_type: 'image', columns: [] };
+  ok(defaultYs(imgDs5, ['a', 'b', 'c', 'd', 'e']).length === 4,
+     '系列超过 4 个时只带前 4 个');
+  const tblDs = { source_type: 'excel', columns: [] };
+  ok(JSON.stringify(defaultYs(tblDs, ['销售额', '利润'])) ===
+     JSON.stringify(['销售额']),
+     '普通表格仍只默认带第一个数值列');
+
   return true;
 })();
