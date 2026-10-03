@@ -1430,13 +1430,20 @@ function dbFillFromSaved() {
   $('#dbKind').value = c.kind;
   Object.keys(c).forEach(k => {
     if (k === 'name' || k === 'kind' || k === 'has_password') return;
+    // 这两个是状态标记，不是连接字段，别塞进表单
+    if (k === 'password_lost' || k === 'password_note') return;
     dbForm[c.kind + '.' + k] = String(c[k]);
   });
   renderDbFields();
   $('#dbConnName').value = c.name;
-  dbMsg(c.has_password
-    ? '已载入「' + c.name + '」，密码留空即沿用保存的那个'
-    : '已载入「' + c.name + '」（没记密码，需要重新填）');
+  if (c.password_lost) {
+    // 密码是 DPAPI 密文存的，换机器或换 Windows 账户就解不开了
+    dbMsg(c.password_note || '这份配置保存的密码在当前账户下解不开，请重新填写', true);
+  } else {
+    dbMsg(c.has_password
+      ? '已载入「' + c.name + '」，密码留空即沿用保存的那个'
+      : '已载入「' + c.name + '」（没记密码，需要重新填）');
+  }
 }
 
 function renderDbTables(tables) {

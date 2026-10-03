@@ -1,13 +1,16 @@
 """连接配置落盘：存在项目目录下的 db_connections.json。
 
-两条硬规则：
+三条硬规则：
 1. **密码只进不出** —— 文件里存、内存里用，但任何 API 响应都不回显，
    前端只会看到 has_password: true/false。
 2. **改配置不清空密码** —— 界面上密码框永远是空的（因为不回显），
    用户改个端口号保存时不能顺手把密码抹掉，所以要按「未提供则沿用旧值」处理。
+3. **密码加密后落盘** —— 盘上是 DPAPI 密文（见 core/secret.py），
+   只有本机当前 Windows 账户能解开。换机器或换账户时解不开，
+   按「没存过密码」处理并让用户重输，而不是静默拿空密码去连库。
 
-另：这份文件是明文存密码的。这是本地单机工具，图的是不用每次重输；
-如果不想留在磁盘上，保存时把「记住密码」取消勾选即可，密码就只留在当次请求里。
+如果不想把密码留在磁盘上，保存时把「记住密码」取消勾选即可，
+密码就只留在当次请求里。
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ import json
 import os
 import time
 
+from .. import secret
 from .connect import DBConfig
 
 MAX_CONNECTIONS = 50
@@ -36,15 +40,38 @@ def _read() -> list[dict]:
     except Exception:
         return []
     items = d.get("connections") if isinstance(d, dict) else d
-    return [x for x in (items or []) if isinstance(x, dict)]
+
+    out = []
+    for x in (items or []):
+        if not isinstance(x, dict):
+            continue
+        it = dict(x)
+        raw = str(it.get("password") or "")
+        if raw:
+            plain = secret.unprotect(raw)
+            if not plain and secret.is_encrypted(raw):
+                # 密文解不开：换了机器或换了 Windows 账户。当作没存过密码，
+                # 同时把 remember_password 落回 False，免得界面还显示「已记住」。
+                it["password_lost"] = True
+                it["remember_password"] = False
+            it["password"] = plain
+        out.append(it)
+    return out
 
 
 def _write(items: list[dict]) -> bool:
     p = _path()
+    # 落盘前加密。复制一份再改，别把调用方对象里的明文密码就地换成密文。
+    stored = []
+    for it in items:
+        d = {k: v for k, v in it.items() if k != "password_lost"}
+        if d.get("password"):
+            d["password"] = secret.protect(str(d["password"]))
+        stored.append(d)
     try:
         tmp = p + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"connections": items[:MAX_CONNECTIONS],
+            json.dump({"connections": stored[:MAX_CONNECTIONS],
                        "saved_at": time.time()}, f, ensure_ascii=False, indent=2)
         os.replace(tmp, p)
         return True
@@ -59,6 +86,10 @@ def list_public() -> list[dict]:
         cfg = DBConfig.from_dict(d)
         item = cfg.to_public()
         item["remember_password"] = bool(d.get("remember_password", True))
+        if d.get("password_lost"):
+            item["password_lost"] = True
+            item["password_note"] = ("这份配置存的密码在当前 Windows 账户下解不开"
+                                     "（换过机器或账户？），执行前请重新填写")
         out.append(item)
     return out
 
