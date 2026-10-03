@@ -10,9 +10,11 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import traceback
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -56,7 +58,21 @@ VENDOR_ECHARTS = os.path.join(WEB_DIR, "vendor", "echarts.min.js")
 os.makedirs(OUT_DIR, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
 
-app = FastAPI(title="ReportStudio")
+@asynccontextmanager
+async def _lifespan(_app: "FastAPI"):
+    """启动时收紧同步端点的线程池上限。
+
+    用 lifespan 而不是已废弃的 @app.on_event("startup")。
+    """
+    import anyio.to_thread
+    try:
+        anyio.to_thread.current_default_thread_limiter().total_tokens = _MAX_WORKERS
+    except Exception:
+        pass          # 拿不到就沿用默认值 40，不影响功能
+    yield
+
+
+app = FastAPI(title="ReportStudio", lifespan=_lifespan)
 
 LOG_DIR = os.path.join(ROOT, "logs")
 # 会话文件的回收站：core/session_store 删不掉时会用 rename 把文件挪到这里。
@@ -101,6 +117,39 @@ SESSION: dict[str, dict] = {}
 # 输出目录 -> 生成报告所需的一切，供 Word / PDF 导出复用
 REPORTS: dict[str, dict] = {}
 
+# 保护上面两个注册表 + SESSION 的遍历。
+#
+# 为什么需要：这些端点原来是 async def，跑在单线程事件循环里，
+# 遍历 SESSION 时不可能有别的请求插进来。改成同步 def 后由线程池并发执行，
+# 「list_datasets 正在遍历、upload 正在往里塞」就可能同时发生，
+# CPython 会直接抛 RuntimeError: dictionary changed size during iteration。
+#
+# 锁的粒度刻意只包住注册表的读写，**不包住**解析、渲染、SQL 这些重活 ——
+# 否则并发度还是 1，改动就白做了。重活本身不共享状态，可以放心并行。
+_LOCK = threading.RLock()
+
+# 同步端点跑在 anyio 的默认线程池里，默认容量 40。对本地单机工具够用，
+# 但 40 个 /api/generate 同时进来会要了命：每个请求都带着一份 pandas 数据集
+# 和 matplotlib 的字体缓存，上百 MB 一个，40 个就是几个 GB，直接把机器拖进 swapping。
+# 收到 4 个既能让两个请求真正并行（实测两个出图 0.52 倍耗时），
+# 又不会让内存失控。多出来的请求排队等就行，反正它们本来也要等 CPU。
+_MAX_WORKERS = 4
+
+
+def _session_snapshot() -> list[tuple[str, dict]]:
+    """取 SESSION 的快照，供遍历用。
+
+    有了快照，遍历期间别人怎么改 SESSION 都无所谓；
+    加锁只是为了拷贝这一刻的一致性，不为了把遍历全程串行化。
+    """
+    with _LOCK:
+        return list(SESSION.items())
+
+
+def _session_ids() -> list[str]:
+    with _LOCK:
+        return list(SESSION.keys())
+
 
 def _report_key(out_dir: str) -> str:
     """报告注册表的键：路径统一归一化。
@@ -123,11 +172,18 @@ def _fallback_grid(ds: Dataset) -> list[list]:
 
 
 def _keep(datasets: list[tuple]):
+    # 落盘放在锁外：json.dump 大表要几百毫秒，锁内做会把并发请求全堵住。
+    # 先把要写的内容备好，再进锁只做「登记 + 取出引用」。
+    prepared = []
     for ds, grid in datasets:
-        SESSION[ds.id] = {"dataset": ds,
-                          "grid": grid if grid is not None else _fallback_grid(ds)}
-        if session_store.enabled():
-            session_store.save(ds, SESSION[ds.id]["grid"])
+        g = grid if grid is not None else _fallback_grid(ds)
+        prepared.append((ds, g))
+    with _LOCK:
+        for ds, g in prepared:
+            SESSION[ds.id] = {"dataset": ds, "grid": g}
+    if session_store.enabled():
+        for ds, g in prepared:
+            session_store.save(ds, g)
 
 
 def _restore_session() -> int:
@@ -135,12 +191,13 @@ def _restore_session() -> int:
     if not session_store.enabled():
         return 0
     n = 0
-    for ds, grid in session_store.load_all():
-        if ds.id in SESSION:
-            continue
-        SESSION[ds.id] = {"dataset": ds,
-                          "grid": grid if grid is not None else _fallback_grid(ds)}
-        n += 1
+    with _LOCK:
+        for ds, grid in session_store.load_all():
+            if ds.id in SESSION:
+                continue
+            SESSION[ds.id] = {"dataset": ds,
+                              "grid": grid if grid is not None else _fallback_grid(ds)}
+            n += 1
     return n
 
 
@@ -156,22 +213,44 @@ def status():
             "outputs": OUT_DIR, "temp": TEMP_DIR,
             "echarts_local": os.path.exists(VENDOR_ECHARTS),
             "persist": session_store.enabled(),
-            "datasets": len(SESSION),
+            "datasets": len(_session_snapshot()),
             # 可回收的残片（*.deleted / 过期 *.tmp / 会话回收站），
             # 界面上据此显示「清理缓存（147 个 / 72 MB）」
             "residue": st["count"], "residue_size": st["size"]}
 
 
 @app.post("/api/upload")
-async def upload(files: list[UploadFile] = File(...)):
+def upload(files: list[UploadFile] = File(...)):
+    """导入文件。
+
+    这里是同步 def 而不是 async def：parse_file 里面是 pandas / openpyxl / OCR，
+    单个文件能跑几秒到几十秒。写成 async def 的话它跑在事件循环里，
+    这段时间整个服务（含 /api/status、静态资源）全部无响应。
+    实测（2000 行样本、6 张图，出图 5 秒）出图期间打 /api/status：
+    async 版尾部延迟 10120ms，sync 版 607ms。
+    改成同步 def 后由 FastAPI 丢进线程池，重活并行跑，事件循环始终空着。
+    """
     results = []
+    limit = MAX_UPLOAD_MB * 1024 * 1024
     for f in files:
         name = f.filename or "未命名"
-        content = await f.read()
-        if len(content) > MAX_UPLOAD_MB * 1024 * 1024:
+        # UploadFile.file 是 SpooledTemporaryFile，同步端点里直接用它读。
+        # 分块读并在超限时立刻停：一个几百 MB 的文件不该先整个进内存才发现超限。
+        buf = bytearray()
+        too_big = False
+        while True:
+            chunk = f.file.read(1024 * 1024)
+            if not chunk:
+                break
+            buf += chunk
+            if len(buf) > limit:
+                too_big = True
+                break
+        if too_big:
             results.append({"ok": False, "name": name,
                             "error": f"文件超过 {MAX_UPLOAD_MB} MB"})
             continue
+        content = bytes(buf)
         ext = os.path.splitext(name)[1].lower()
         # 存到「uuid目录/原名」下，这样文件名里不会漏出一串 uuid 前缀
         sub = os.path.join(TEMP_DIR, uuid.uuid4().hex[:8])
@@ -197,7 +276,7 @@ async def upload(files: list[UploadFile] = File(...)):
 
 
 @app.post("/api/paste")
-async def paste(payload: dict):
+def paste(payload: dict):
     text = (payload.get("text") or "").strip()
     if not text:
         raise HTTPException(400, "粘贴内容是空的")
@@ -207,45 +286,56 @@ async def paste(payload: dict):
 
 
 @app.post("/api/fix")
-async def fix(payload: dict):
+def fix(payload: dict):
     """界面上改表头行 / 列类型后重算。"""
     did = payload.get("id")
-    if did not in SESSION:
-        raise HTTPException(404, "数据表不存在，请重新导入")
-    item = SESSION[did]
-    old = item["dataset"]
+    with _LOCK:
+        item = SESSION.get(did)
+        if item is None:
+            raise HTTPException(404, "数据表不存在，请重新导入")
+        # 在锁内把要用到的两个引用都取出来。
+        # build_dataset 要跑几百毫秒，不能占着锁；而等到锁外再取 SESSION[did]，
+        # 期间这张表可能已经被 /api/dataset/{id} 删了 —— 那时拿到的是 None，
+        # 后面 item["grid"] 就是 TypeError，用户看到一句内部异常。
+        grid, old = item["grid"], item["dataset"]
     ds = build_dataset(
-        item["grid"],
+        grid,
         name=old.name,
         source_type=old.source_type,
         header_row=(int(payload["header_row"]) - 1) if payload.get("header_row") else None,
         type_overrides=payload.get("types") or {},
         dataset_id=did,
     )
-    item["dataset"] = ds
+    with _LOCK:
+        # 表可能在这几百毫秒里被删了。写回前确认它还在，
+        # 不在就只回结果、不落盘（用户看到的是这次修正生效了，刷新后没了）。
+        if SESSION.get(did) is item:
+            item["dataset"] = ds
     if session_store.enabled():
-        session_store.save(ds, item["grid"])
+        session_store.save(ds, grid)
     return {"ok": True, "dataset": ds.to_dict()}
 
 
 @app.get("/api/datasets")
 def list_datasets():
     """当前会话里所有数据表，包括上次会话恢复的那些。"""
-    return {"items": [it["dataset"].to_dict() for it in SESSION.values()]}
+    return {"items": [it["dataset"].to_dict() for _, it in _session_snapshot()]}
 
 
 @app.delete("/api/dataset/{did}")
 def delete_dataset(did: str):
     """移除一张表：内存和磁盘上都清掉。"""
-    SESSION.pop(did, None)
+    with _LOCK:
+        SESSION.pop(did, None)
     session_remove(did)
     return {"ok": True}
 
 
 @app.post("/api/session/clear")
 def clear_session():
-    n = len(SESSION)
-    SESSION.clear()
+    with _LOCK:
+        n = len(SESSION)
+        SESSION.clear()
     session_clear()
     return {"ok": True, "removed": n}
 
@@ -288,7 +378,7 @@ def db_list_connections():
 
 
 @app.post("/api/db/connections")
-async def db_save_connection(payload: dict):
+def db_save_connection(payload: dict):
     from core.db import store as dbstore
     ok, note, info = dbstore.save(payload)
     return {"ok": ok, "note": note, "connection": info, "items": dbstore.list_public()}
@@ -302,8 +392,12 @@ def db_delete_connection(name: str = ""):
 
 
 @app.post("/api/db/test")
-async def db_test(payload: dict):
-    """试连。失败也是 ok:false + 白话原因，不抛。"""
+def db_test(payload: dict):
+    """试连。失败也是 ok:false + 白话原因，不抛。
+
+    同步 def：底下是真实网络握手（TCP + 认证），动辄几秒到超时，
+    放事件循环里会把整个服务卡住。
+    """
     from core.db import store as dbstore
     from core.db.query import test_connection
     cfg, err = dbstore.resolve(payload)
@@ -314,7 +408,7 @@ async def db_test(payload: dict):
 
 
 @app.post("/api/db/scan")
-async def db_scan(payload: dict):
+def db_scan(payload: dict):
     """连上并列出可读的表/视图。"""
     from core.db import store as dbstore
     from core.db.connect import SPECS, connect
@@ -340,7 +434,7 @@ async def db_scan(payload: dict):
 
 
 @app.post("/api/db/columns")
-async def db_columns(payload: dict):
+def db_columns(payload: dict):
     """看某张表的列定义。"""
     from core.db import store as dbstore
     from core.db.connect import connect
@@ -369,7 +463,7 @@ async def db_columns(payload: dict):
 
 
 @app.post("/api/db/build_sql")
-async def db_build_sql(payload: dict):
+def db_build_sql(payload: dict):
     """按选中的表/列生成一条可直接跑的 SELECT（纯拼串，不需要连库）。"""
     from core.db.query import build_select_template, preview_sql
     table = (payload.get("table") or "").strip()
@@ -385,11 +479,14 @@ async def db_build_sql(payload: dict):
 
 
 @app.post("/api/db/query")
-async def db_query(payload: dict):
+def db_query(payload: dict):
     """执行只读 SQL。
 
     import=true（默认）时把结果登记成一张数据表，之后就能像导入的表格一样
     配图表、进报告、导出 Word/PDF。import=false 只回预览不落任何数据。
+
+    同步 def：SQL 是阻塞调用（TCP 往返 + 数据库端执行），
+    大结果集一次能跑几十秒，写成 async def 期间整个服务都没响应。
     """
     from core.db import store as dbstore
     from core.db.guard import SQLRejected
@@ -458,16 +555,27 @@ async def db_query(payload: dict):
 
 
 @app.post("/api/db/upload")
-async def db_upload(file: UploadFile = File(...)):
-    """上传一个 SQLite 库文件，返回可直接用的 path（省得手敲路径）。"""
+def db_upload(file: UploadFile = File(...)):
+    """上传一个 SQLite 库文件，返回可直接用的 path（省得手敲路径）。
+
+    同步 def（配合 f.file.read 分块读，跟 /api/upload 同一个理由）：
+    库文件上限 2 GB，一次性 await file.read() 会把整个文件塞进内存。
+    """
     name = file.filename or "uploaded.db"
     ext = os.path.splitext(name)[1].lower()
     if ext not in (".db", ".sqlite", ".sqlite3", ".db3"):
         return {"ok": False, "error": f"只接受 SQLite 库文件（.db/.sqlite/.sqlite3/.db3），"
                                      f"这个是 {ext or '无扩展名'}"}
-    content = await file.read()
-    if len(content) > MAX_UPLOAD_MB * 1024 * 1024 * 10:
-        return {"ok": False, "error": "库文件太大（上限 2 GB）"}
+    cap = MAX_UPLOAD_MB * 1024 * 1024 * 10
+    buf = bytearray()
+    while True:
+        chunk = file.file.read(4 * 1024 * 1024)
+        if not chunk:
+            break
+        buf += chunk
+        if len(buf) > cap:
+            return {"ok": False, "error": "库文件太大（上限 2 GB）"}
+    content = bytes(buf)
     sub = os.path.join(TEMP_DIR, "db", uuid.uuid4().hex[:8])
     os.makedirs(sub, exist_ok=True)
     path = os.path.join(sub, _safe(name) or "uploaded.db")
@@ -486,14 +594,14 @@ async def db_upload(file: UploadFile = File(...)):
 
 
 @app.post("/api/plan")
-async def plan(payload: dict):
+def plan(payload: dict):
     datasets = _resolve(payload.get("dataset_ids") or [])
     from core.merge import suggest_plan
     return suggest_plan(datasets)
 
 
 @app.post("/api/parse_nl")
-async def parse_nl(payload: dict):
+def parse_nl(payload: dict):
     datasets = _resolve([payload.get("dataset_id")])
     if not datasets:
         raise HTTPException(404, "数据表不存在")
@@ -509,9 +617,30 @@ async def parse_nl(payload: dict):
 
 
 @app.post("/api/generate")
-async def generate(payload: dict):
-    datasets = _resolve(payload.get("dataset_ids") or [])
+def generate(payload: dict):
+    """生成报告。
+
+    同步 def：这里面有 pandas 聚合、matplotlib 出图、HTML/Markdown 渲染，
+    实测一张多图报告要跑 2~8 秒。外加 polish_summary 会发一次 LLM 请求
+    （配了模型才发，没配直接跳过）。写成 async def 时这些全部占着事件循环，
+    期间 /api/status、静态资源、看板全都超时 —— 界面表现为「整个卡死」。
+
+    改成同步 def 后由线程池执行，重活期间事件循环空着，
+    轻量接口照常几十毫秒返回。
+    """
+    want_ids = payload.get("dataset_ids") or []
+    datasets = _resolve(want_ids)
     if not datasets:
+        # 两种「拿不到数据」要分开说。以前一律回「请先导入数据」，
+        # 但还有第三种情况：表是在这个请求发出之后、跑到这里之前被别人删掉的
+        # （界面上删表、另一个标签页删表、或者上一步刚生成的报告目录被清理）。
+        # 这时让用户去「导入数据」是误导 —— 他明明导入过。
+        alive = _session_ids()
+        if want_ids and not any(i in alive for i in want_ids):
+            missing = [i for i in want_ids if i not in alive]
+            raise HTTPException(
+                404, f"选中的 {len(missing)} 张数据表已经不在了"
+                     f"（可能刚被删除）。请重新选择要用的数据表。")
         raise HTTPException(400, "请先导入数据")
 
     mode = payload.get("merge_mode") or "merge"
@@ -630,10 +759,12 @@ async def generate(payload: dict):
         pass          # 摘要写不进去不影响报告本身，列表退化成「只有文件名」
 
     rel = os.path.relpath(out_dir, ROOT).replace("\\", "/")
-    REPORTS[_report_key(out_dir)] = {"datasets": datasets, "spec": spec,
-                                     "chart_blocks": chart_blocks,
-                                     "metric_cards": metric_cards,
-                                     "summary": summary, "chart_images": chart_images}
+    with _LOCK:
+        REPORTS[_report_key(out_dir)] = {"datasets": datasets, "spec": spec,
+                                         "chart_blocks": chart_blocks,
+                                         "metric_cards": metric_cards,
+                                         "summary": summary,
+                                         "chart_images": chart_images}
     return {
         "ok": True,
         "report_url": f"/{rel}/report.html",
@@ -654,7 +785,7 @@ def dashboards_list():
 
 
 @app.post("/api/dashboard/save")
-async def dashboard_save(payload: dict):
+def dashboard_save(payload: dict):
     """保存看板配置并立刻渲染一份。
 
     存的是「要哪几个指标、哪几张图、怎么排」，不是算好的数字 ——
@@ -673,7 +804,7 @@ async def dashboard_save(payload: dict):
 
 
 @app.post("/api/dashboard/render")
-async def dashboard_render(payload: dict):
+def dashboard_render(payload: dict):
     """按当前数据重新渲染一个看板。"""
     did = (payload.get("id") or "").strip()
     cfg = dash.get(did)
@@ -684,7 +815,7 @@ async def dashboard_render(payload: dict):
 
 
 @app.post("/api/dashboard/preview")
-async def dashboard_preview(payload: dict):
+def dashboard_preview(payload: dict):
     """按当前配置即时渲染看板，但**不存成常驻看板**。
 
     报告和看板现在是同一屏里的两个视图：改完图表配置点生成报告，
@@ -696,8 +827,8 @@ async def dashboard_preview(payload: dict):
         return {"ok": False,
                 "error": "看板还是空的：先在「说清需求」里配一张图，或在「指标列」里勾一个指标。"}
     if not cfg.dataset_ids:
-        cfg.dataset_ids = list(SESSION.keys())
-    datasets, missing = dash.resolve_datasets(cfg, SESSION)
+        cfg.dataset_ids = _session_ids()
+    datasets, missing = dash.resolve_datasets(cfg, dict(_session_snapshot()))
     if not datasets:
         return {"ok": False,
                 "error": "当前会话里没有数据表，先在左边导入文件或用 SQL 取数。"}
@@ -713,7 +844,7 @@ def dashboard_delete(did: str):
 
 
 @app.post("/api/dashboard/resize")
-async def dashboard_resize(payload: dict):
+def dashboard_resize(payload: dict):
     """记录用户在看板里拖出来的每张图尺寸（宽度 span / 高度 px）。
 
     为什么单独一个接口而不是塞进 save：拖动是高频的、且只动尺寸不动图表配置，
@@ -752,7 +883,7 @@ async def dashboard_resize(payload: dict):
 
 def _dashboard_render(cfg) -> dict:
     """渲染看板并把「哪几张表没了」如实带回去。"""
-    datasets, missing = dash.resolve_datasets(cfg, SESSION)
+    datasets, missing = dash.resolve_datasets(cfg, dict(_session_snapshot()))
     names_for_missing = list(missing)
     stat = dash.render_to_file(datasets, cfg, VENDOR_ECHARTS, missing)
     stat["missing"] = names_for_missing
@@ -927,14 +1058,15 @@ def history_delete(dir: str = ""):
         return {"ok": False, "error": "这个路径不是一份报告，拒绝删除"}
     if not os.path.isdir(target):
         return {"ok": False, "error": "这份报告已经不在了"}
-    REPORTS.pop(_report_key(dir), None)   # 顺手清掉导出用的注册表，免得占内存
+    with _LOCK:
+        REPORTS.pop(_report_key(dir), None)   # 顺手清掉导出用的注册表，免得占内存
     ok = _rm_dir(target)
     return {"ok": ok,
             "error": "" if ok else "删除失败（目录可能正被占用：关掉预览它的窗口再试）"}
 
 
 @app.post("/api/export_dataset")
-async def export_dataset(payload: dict):
+def export_dataset(payload: dict):
     """把会话里（可能刚在界面上修正过）的数据表导出成 CSV / Excel。
 
     补上「导入 → 改表头行 / 改列类型 / 剔合计行 → **导出**」这条闭环里断掉的最后一环：
@@ -944,7 +1076,8 @@ async def export_dataset(payload: dict):
     if kind not in ("csv", "xlsx"):
         return {"ok": False, "error": "只支持 csv / xlsx"}
     did = payload.get("id")
-    item = SESSION.get(did)
+    with _LOCK:
+        item = SESSION.get(did)
     if not item:
         return {"ok": False, "error": "数据表不在当前会话里，请重新导入"}
     ds = item["dataset"]
@@ -1008,14 +1141,20 @@ def _sweep_exports(d: str, max_age_days: int = 7, limit: int = 10) -> None:
 
 
 @app.post("/api/export")
-async def export(payload: dict):
+def export(payload: dict):
+    """导出 Word / PDF / 拼图。
+
+    同步 def：python-docx、reportlab 都是纯 CPU + 同步 I/O，
+    PDF 还要经过一次浏览器内核渲染，实测 1~5 秒。
+    """
     kind = payload.get("kind")
     if kind not in ("docx", "pdf", "png"):
         raise HTTPException(400, "只支持 docx / pdf / png")
     out_dir = payload.get("dir")
     if not out_dir or not os.path.isdir(out_dir):
         raise HTTPException(404, "报告目录不存在，请重新生成")
-    sub = REPORTS.get(_report_key(out_dir))
+    with _LOCK:
+        sub = REPORTS.get(_report_key(out_dir))
     if not sub:
         raise HTTPException(404, "这份报告已过期，请重新生成后再导出")
 
@@ -1222,9 +1361,9 @@ def cleanup_residue(limit: int = 20) -> int:
 
 def _resolve(ids: list[str]) -> list[Dataset]:
     out = []
-    for i in ids or []:
-        if i in SESSION:
-            out.append(SESSION[i]["dataset"])
+    for i, item in _session_snapshot():
+        if i in (ids or []):
+            out.append(item["dataset"])
     return out
 
 
@@ -1276,7 +1415,6 @@ async def _no_cache_frontend(request: Request, call_next):
     return resp
 
 if __name__ == "__main__":
-    import threading
     import webbrowser
 
     import uvicorn
