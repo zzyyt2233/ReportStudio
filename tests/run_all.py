@@ -47,6 +47,14 @@ SUITES: list[tuple[str, list[str] | None, bool]] = [
     ("dashboard", ["tests/dashboard.py"], False),
     ("check_frontend", ["tests/check_frontend.py"], False),
     ("frontend_logic", None, False),        # node + jsdom
+    # 不标 slow：它们只建表不删文件，而且恰恰是最该常跑的几环 ——
+    # 「重活跑着的时候服务还通不通」「SESSION 遍历有没有竞态」
+    # 这类问题，其他套件全绿也照样可能存在。
+    # 轮次由脚本自己按 --quick 减半。
+    ("session_race_unit", ["tests/session_race_unit.py"], False),
+    ("history_cleanup", ["tests/history_cleanup.py"], False),
+    ("race_safety", ["tests/race_safety.py"], False),
+    ("concurrency", ["tests/concurrency.py"], False),
     ("no500", ["tests/no500.py"], True),
 ]
 
@@ -101,6 +109,12 @@ def main() -> int:
             run = [node, "tests/frontend_logic.js"]
         else:
             run = [py] + cmd
+            # 这两个自己认识 --quick：轮次 / 压测时长减半，
+            # 跑得快一点但结论仍然成立
+            if name == "concurrency" and quick:
+                run.append("--quick")
+            if name == "race_safety" and quick:
+                run.append("--quick")
 
         ok, out, err, dt = run_one(run)
         tail = ""

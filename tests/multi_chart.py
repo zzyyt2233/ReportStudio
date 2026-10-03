@@ -17,7 +17,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests._helpers import IsolatedSession, make_client, ok  # noqa: E402
+from tests._helpers import IsolatedSession, dashboards_dir, make_client, ok  # noqa: E402
 
 FAILS: list[str] = []
 
@@ -183,8 +183,10 @@ with IsolatedSession(client) as iso:
     after = [i["name"] for i in client.get("/api/dashboards").json()["items"]]
     check("预览**不**落成常驻看板（否则切几次就多一堆）", before == after,
           f"→ {after}")
-    pvfile = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                          "dashboards", "_preview.html")
+    # 预览文件写进「当前生效」的看板目录 —— make_client() 默认隔离后是
+    # temp/dashboards_test，写死成 ROOT/dashboards 的话，之前全靠真目录里
+    # 碰巧残留的 _preview.html 蒙混过关，残留一没就假失败。
+    pvfile = os.path.join(dashboards_dir(), "_preview.html")
     check("预览文件确实写出来了", os.path.exists(pvfile))
     if os.path.exists(pvfile):
         body = open(pvfile, encoding="utf-8").read()

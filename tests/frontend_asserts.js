@@ -374,5 +374,43 @@ window.__runAsserts = (async function () {
   ok($$('.c-y .chip', sw3).find(c => c.dataset.n === '年份').classList.contains('on'),
      '原数值型横轴年份被收进纵轴（只有数值才能当纵轴）');
 
+  /* ---------- 20. outputs 存量管理：总量文案 + 清理按钮门槛与三步确认 ---------- */
+  // 总量来自后端 grand_*（不受搜索词影响），体积走 fmtSize 的 MB/GB 档
+  window.__HIST_STUB = { ok: true, items: [], total: 0,
+                         grand_total: 120, grand_size: 250 * 1024 * 1024 };
+  await renderHistory();
+  ok($('#histCount').textContent === '共 120 份 · 250.0 MB',
+     '历史计数显示后端总量和体积（实际 ' + $('#histCount').textContent + '）');
+  ok($('#histCleanBtn').hidden === false
+     && $('#histCleanBtn').textContent.indexOf('250.0 MB') > 0,
+     '存量过门槛时「清理旧报告」按钮出现并带体积（实际 hidden='
+     + $('#histCleanBtn').hidden + '，' + $('#histCleanBtn').textContent + '）');
+
+  // 门槛以下不摆按钮：没事摆一个只会让人怀疑是不是要动他的东西
+  window.__HIST_STUB = { ok: true, items: [], total: 0,
+                         grand_total: 3, grand_size: 5 * 1024 * 1024 };
+  await renderHistory();
+  ok($('#histCleanBtn').hidden === true,
+     '存量很小（3 份 / 5MB）时不摆清理按钮');
+  ok($('#histCount').textContent === '共 3 份 · 5.0 MB',
+     '小存量文案同样带体积（实际 ' + $('#histCount').textContent + '）');
+
+  // 点击流程：输入 90 天 → 统计（不删）→ 确认 → 真删，共两次 POST。
+  // 产品代码已从原生 confirm/prompt 换成自绘 appConfirm/appPrompt（预览窗口
+  // 会禁用原生弹窗），测试直接覆盖拿固定返回值，不真开 dialog。
+  appConfirm = async () => true;
+  appPrompt = async () => '90';
+  window.__HIST_STUB = { ok: true, items: [], total: 0,
+                         grand_total: 120, grand_size: 250 * 1024 * 1024 };
+  window.__CLEANUP_STUB = { ok: true, removed: 30, freed: 80 * 1024 * 1024, left: 0 };
+  $('#histCleanBtn').onclick();
+  await new Promise(r => setTimeout(r, 40));
+  const cleanCalls = __CALLS.filter(
+    c => c.url.indexOf('/api/history/cleanup') >= 0 && c.method === 'POST');
+  ok(cleanCalls.length === 2,
+     '点一次按钮 = 先统计再真删，两次请求（实际 ' + cleanCalls.length + '）');
+  ok($('#histMsg').textContent.indexOf('已清理 30 份') === 0,
+     'toast 汇报清理结果和释放量（实际 ' + $('#histMsg').textContent + '）');
+
   return true;
 })();

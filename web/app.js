@@ -69,6 +69,68 @@ async function api(url) {
   } catch (e) { return {}; }
 }
 
+/* ---------- 自绘确认 / 输入弹窗 ----------
+   window.confirm / window.prompt 在内嵌预览窗口（iframe sandbox、部分 webview）
+   里会被静默禁用：点「删除」「清理」什么都不弹、直接 return，
+   看起来就像按钮坏了。这里用原生 <dialog> 自绘（纯 DOM，不受弹窗限制），
+   Promise 化之后调用处 await 一行。jsdom 等不支持 showModal 时降级 open 属性。 */
+function _dlg({ title, body = '', okText = '确定', danger = false, input = null }) {
+  return new Promise(resolve => {
+    const d = document.createElement('dialog');
+    d.className = 'modal' + (danger ? ' danger' : '');
+    const t = document.createElement('p');
+    t.className = 'm-title';
+    t.textContent = title;
+    d.appendChild(t);
+    if (body) {
+      const b = document.createElement('p');
+      b.className = 'm-body';
+      // 报告名、连接名都是用户输入，一律 textContent，不走 innerHTML
+      b.textContent = body;
+      d.appendChild(b);
+    }
+    let inp = null;
+    if (input !== null) {
+      inp = document.createElement('input');
+      inp.className = 'txt';
+      inp.value = input;
+      d.appendChild(inp);
+    }
+    const acts = document.createElement('div');
+    acts.className = 'm-acts';
+    const c = document.createElement('button');
+    c.className = 'btn';
+    c.textContent = '取消';
+    const k = document.createElement('button');
+    k.className = 'btn ' + (danger ? 'danger' : 'primary');
+    k.textContent = okText;
+    acts.appendChild(c);
+    acts.appendChild(k);
+    d.appendChild(acts);
+    let settled = false;
+    const done = val => { if (settled) return; settled = true; resolve(val); d.remove(); };
+    k.onclick = () => done(input !== null ? (inp.value || '') : true);
+    c.onclick = () => done(input !== null ? null : false);
+    d.addEventListener('cancel', () => done(input !== null ? null : false));
+    // Esc 走 cancel；close 是兜底（万一 dialog 被外部 close）
+    d.addEventListener('close', () => done(input !== null ? null : false));
+    if (input !== null) {
+      inp.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); k.onclick(); }
+      });
+    }
+    document.body.appendChild(d);
+    try { d.showModal(); } catch (e) { d.setAttribute('open', ''); }
+    if (inp) { inp.focus(); inp.select(); } else { k.focus(); }
+  });
+}
+function appConfirm(title, body = '', okText = '确定') {
+  return _dlg({ title, body, okText, danger: true });
+}
+function appPrompt(title, def = '') {
+  return _dlg({ title, input: def, okText: '确定' });
+}
+
 function esc(s) {
   return String(s === null || s === undefined ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -80,7 +142,8 @@ function fmtSize(n) {
   if (!n) return '';
   if (n < 1024) return n + ' B';
   if (n < 1024 * 1024) return Math.round(n / 1024) + ' KB';
-  return (n / 1024 / 1024).toFixed(1) + ' MB';
+  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+  return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
 }
 
 /* 浏览器只认「用户手势」那一下的临时激活状态（Chrome 约 5 秒）。
@@ -170,6 +233,10 @@ async function restoreSession() {
 
 /* ---------- 步骤 1：导入 ---------- */
 $('#drop').onclick = () => $('#file').click();
+// 拖放区是 role=button 的 div：回车 / 空格也要能打开文件选择框（键盘可达）
+$('#drop').onkeydown = (e) => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('#file').click(); }
+};
 $('#folderBtn').onclick = () => $('#folder').click();
 
 const dz = $('#drop');
@@ -215,7 +282,7 @@ function renderFiles() {
     el.innerHTML = `<span class="dot ${bad}"></span>
       <span class="nm">${esc(ds.name)}</span>
       <span class="src">${esc(ds.source_type)} · ${ds.total_rows} 行 · ${ds.columns.length} 列</span>
-      <span class="rm" data-id="${ds.id}">×</span>`;
+      <button class="rm" data-id="${ds.id}" aria-label="移除数据表 ${esc(ds.name)}">×</button>`;
     box.appendChild(el);
   });
   $$('#files .rm').forEach(x => x.onclick = async () => {
@@ -230,7 +297,7 @@ function renderFiles() {
 
 $('#clearAll').onclick = async () => {
   if (!Object.keys(STORE).length) return;
-  if (!confirm('确定清空所有已导入的数据表？磁盘上的会话缓存也会一并删除。')) return;
+  if (!await appConfirm('清空所有数据表？', '磁盘上的会话缓存也会一并删除。', '清空')) return;
   await post('/api/session/clear', {}).catch(() => {});
   Object.keys(STORE).forEach(k => delete STORE[k]);
   curId = null; lastOut = null;
@@ -414,7 +481,7 @@ function addChartCard(spec) {
   el.className = 'chart-card';
   el.dataset.id = id;
   el.innerHTML = `
-    <div class="hd"><span>图表</span><span class="x">×</span></div>
+    <div class="hd"><span>图表</span><button type="button" class="x" aria-label="删除这张图表">×</button></div>
     <div class="row"><label>类型</label><select class="c-type">
       ${CHART_TYPES.map(t => `<option value="${t[0]}"${t[0] === (spec.type || 'bar') ? ' selected' : ''}>${t[1]}</option>`).join('')}
     </select><span class="hint">默认图型；每个指标可在下面单独改</span></div>
@@ -476,10 +543,13 @@ function fillChartCard(el, ds, spec) {
   if (!ys.length) ys = nums.slice(0, 1);
   const mea = new Set(roles.measures || []);
   el.querySelector('.c-y').innerHTML = nums.map(n =>
-    `<span class="chip${ys.indexOf(n) >= 0 ? ' on' : ''}" data-n="${esc(n)}" title="${mea.has(n) ? '度量（纵轴候选）' : ''}">${esc(n)}</span>`).join('') ||
+    `<button type="button" class="chip${ys.indexOf(n) >= 0 ? ' on' : ''}" data-n="${esc(n)}"
+      aria-pressed="${ys.indexOf(n) >= 0 ? 'true' : 'false'}"
+      title="${mea.has(n) ? '度量（纵轴候选）' : ''}">${esc(n)}</button>`).join('') ||
     '<span class="hint">勾选数值列作为纵轴指标（度量）</span>';
-  $$('.c-y .chip', el).forEach(c => c && (c.onclick = () => {
+  const toggleChip = (c) => {
     c.classList.toggle('on');
+    c.setAttribute('aria-pressed', c.classList.contains('on') ? 'true' : 'false');
     // 勾掉/勾上一个数列，可选的排序项就变了；不刷新的话排序下拉是过期的，
     // 用户会觉得「按这个指标降序」根本选不出来。
     refreshSortOptions(el);
@@ -487,7 +557,10 @@ function fillChartCard(el, ds, spec) {
     refreshDualVisibility(el);
     refreshSplitVisibility(el);
     scheduleSaveDraft();
-  }));
+  };
+  $$('.c-y .chip', el).forEach(c => c && (c.onclick = () => toggleChip(c)));
+  // chip 是 role=button 的真按钮：键盘回车/空格由浏览器触发 click，无需额外绑定。
+  // aria-pressed 让读屏软件知道它是可切换的，勾没勾上听得到。
   el.querySelector('.c-dir').value = spec.sort_order || 'asc';
   el.querySelector('.c-limit').value = spec.limit || '';
   el.querySelector('.c-span').value = String(spec.span || 6);
@@ -823,7 +896,11 @@ document.addEventListener('keydown', (e) => {
    重算，和刚打开的看板不是同一份东西）。 */
 function switchTab(v) {
   curView = v;
-  $$('.vtab').forEach(b => b.classList.toggle('on', b.dataset.view === v));
+  $$('.vtab').forEach(b => {
+    const on = b.dataset.view === v;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');  // 读屏需要，光有样式不算选中态
+  });
   $('#actsReport').hidden = v !== 'report';
   $('#actsDash').hidden = v === 'report';
 }
@@ -1011,12 +1088,11 @@ function histItem(it) {
 }
 
 async function histDelete(it) {
-  if (!confirm('删除报告「' + it.name + ' ' + it.stamp + '」？\n'
-    + '整个报告目录都会删掉（含图表图片），不可恢复。')) return;
+  if (!(await appConfirm('删除报告「' + it.name + ' ' + it.stamp + '」？',
+    '整个报告目录都会删掉（含图表图片），不可恢复。', '删除'))) return;
   try {
-    const r = await fetch('/api/history?dir=' + encodeURIComponent(it.dir),
-      { method: 'DELETE' });
-    const res = await r.json();
+    // DELETE 方法会被部分代理 / 预览转发层拦下，统一走 POST
+    const res = await post('/api/history/delete', { dir: it.dir });
     toast('histMsg', res.ok ? '已删除报告「' + it.name + '」'
                             : (res.error || '删除失败'), !res.ok);
     renderHistory();
@@ -1031,10 +1107,17 @@ async function renderHistory() {
   const items = res.items || [];
   const cnt = $('#histCount');
   if (cnt) {
-    cnt.textContent = !res.total ? ''
-      : (res.total > items.length ? `共 ${res.total} 份，显示 ${items.length} 份`
-                                  : `共 ${res.total} 份`);
+    // grand_* 是 outputs 里全部报告的份数和体积（服务端算的，不受搜索词影响）；
+    // 老后端没有这两个字段时退回 total，别显示成 0。
+    const gt = res.grand_total || res.total || 0;
+    const gs = res.grand_size || 0;
+    cnt.textContent = !gt ? ''
+      : `共 ${gt} 份${gs ? ' · ' + fmtSize(gs) : ''}`
+        + (res.total > items.length ? `，显示 ${items.length} 份` : '');
   }
+  // 按钮显隐要在提前 return 之前算：列表为空（全删光 / 刚装好）时
+  // 也得让清理按钮收起来，不然会停留在上一轮的旧状态
+  updateHistCleanBtn(res);
   box.textContent = '';
   if (!items.length) {
     const s = document.createElement('span');
@@ -1044,6 +1127,7 @@ async function renderHistory() {
     return;
   }
   items.forEach(it => box.appendChild(histItem(it)));
+  updateHistCleanBtn(res);
 }
 
 if ($('#refreshHist')) $('#refreshHist').onclick = renderHistory;
@@ -1090,6 +1174,58 @@ if ($('#cleanupBtn')) {
       btn.disabled = false;
     }
     await refreshResidue();
+  };
+}
+
+/* ---------- 旧报告批量清理 ----------
+   outputs 只进不出：报告越攒越多，1.8GB 的存量没有入口清。
+   和残片清理不同，这里删的是**正常报告**，不可逆——所以走三步：
+   先输入保留天数 → 服务端统计（不删）→ 弹确认框列出「将删 N 份 · X GB」
+   让用户点头，才真删。存量还小的时候不摆这个按钮，
+   没事摆一个「清理旧报告」只会让人怀疑是不是要动他的东西。 */
+function updateHistCleanBtn(res) {
+  const btn = $('#histCleanBtn');
+  if (!btn) return;
+  const gt = res.grand_total || 0, gs = res.grand_size || 0;
+  const worth = gt > 50 || gs > 100 * 1024 * 1024;
+  btn.hidden = !worth;
+  if (worth) {
+    const s = fmtSize(gs);
+    btn.textContent = s ? `清理旧报告（${s}）` : `清理旧报告（${gt} 份）`;
+  }
+}
+
+if ($('#histCleanBtn')) {
+  $('#histCleanBtn').onclick = async () => {
+    const input = await appPrompt('清理多少天前的旧报告？（最少保留 7 天，建议 90）', '90');
+    if (input === null) return;
+    const days = parseInt(input, 10);
+    if (!days || days < 7) { toast('histMsg', '最少保留 7 天', true); return; }
+    const btn = $('#histCleanBtn');
+    // 先统计不删，把数摆出来让用户点头，再真删
+    const prev = await post('/api/history/cleanup', { days, apply: false })
+      .catch(e => ({ ok: false, error: String(e) }));
+    if (!prev.ok) { toast('histMsg', prev.error || '统计失败', true); return; }
+    if (!prev.removed) { toast('histMsg', `${days} 天以前没有旧报告，没什么可清的`); return; }
+    const sizeTxt = prev.freed ? '、约 ' + fmtSize(prev.freed) : '';
+    if (!await appConfirm('确认清理旧报告？',
+      `将删除 ${prev.removed} 份 ${days} 天前的旧报告${sizeTxt}，删掉无法恢复。`, '删除')) return;
+    btn.disabled = true;
+    btn.textContent = '清理中…';
+    try {
+      const res = await post('/api/history/cleanup', { days, apply: true });
+      if (!res.ok) { toast('histMsg', res.error || '清理失败', true); return; }
+      let m = res.removed
+        ? `已清理 ${res.removed} 份旧报告，释放 ${fmtSize(res.freed) || '0 B'}`
+        : '没有可清理的旧报告';
+      if (res.left) m += `　还有 ${res.left} 份没删掉（可能正被占用，稍后再点一次）`;
+      toast('histMsg', m, !!res.left);
+    } catch (e) {
+      toast('histMsg', '清理出错：' + e, true);
+    } finally {
+      btn.disabled = false;
+    }
+    await renderHistory();
   };
 }
 
@@ -1308,7 +1444,17 @@ function renderDbTables(tables) {
     el.innerHTML = '<span class="dot' + (t.type === 'view' ? ' warn' : '') + '"></span>'
       + '<span class="nm">' + esc(t.schema ? t.schema + '.' + t.name : t.name) + '</span>'
       + '<span class="src">' + (t.type === 'view' ? '视图' : '表') + '</span>';
+    // 整行可点选：没有 tabindex 的话键盘用户进不来（WCAG 2.1.1）
+    el.setAttribute('role', 'button');
+    el.tabIndex = 0;
+    // aria-label 里剥掉 <>&"：setAttribute 虽不会执行脚本，
+    // 但别把恶意字符带进可访问名（也保住 XSS 回归断言的口径）
+    const safeName = (t.schema ? t.schema + '.' : '') + t.name;
+    el.setAttribute('aria-label', '选用表 ' + safeName.replace(/[<>&"]/g, ''));
     el.onclick = () => dbPickTable(t);
+    el.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); dbPickTable(t); }
+    };
     box.appendChild(el);
   });
 }
@@ -1426,7 +1572,7 @@ if ($('#dbTest')) {
   $('#dbDelConn').onclick = async () => {
     const name = $('#dbSaved').value;
     if (!name) { dbMsg('先在上一行选一个已存连接', true); return; }
-    if (!confirm('删除连接「' + name + '」？只删这份配置，不动数据库里的任何东西。')) return;
+    if (!await appConfirm('删除连接「' + name + '」？', '只删这份配置，不动数据库里的任何东西。', '删除')) return;
     try {
       const r = await fetch('/api/db/connections?name=' + encodeURIComponent(name),
         { method: 'DELETE' });
@@ -1565,7 +1711,7 @@ async function dashOpen(id) {
 }
 
 async function dashDelete(id, name) {
-  if (!confirm('删除看板「' + name + '」？只删这份配置，数据集和报告都不动。')) return;
+  if (!await appConfirm('删除看板「' + name + '」？', '只删这份配置，数据集和报告都不动。', '删除')) return;
   try {
     const r = await fetch('/api/dashboard/' + encodeURIComponent(id), { method: 'DELETE' });
     const res = await r.json();

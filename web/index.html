@@ -9,7 +9,7 @@
 <body>
 
 <header class="top">
-  <div class="brand">ReportStudio</div>
+  <h1 class="brand">ReportStudio</h1>
   <div class="sub" id="subHint">图片 / PDF / Excel / 文本 → 图表 + 结论报告</div>
   <div id="llmFlag" class="flag">检查中…</div>
 </header>
@@ -19,8 +19,9 @@
   <div class="col">
 
     <section class="panel">
-      <h3>1 · 导入数据</h3>
-      <div id="drop" class="drop">
+      <h2>1 · 导入数据</h2>
+      <div id="drop" class="drop" role="button" tabindex="0"
+           aria-label="上传数据文件：拖文件到这里，或按回车打开文件选择框">
         <div class="drop-inner">
           <div class="drop-title">拖文件到这里</div>
           <div class="drop-sub">或点击选择 · xlsx / xls / csv / pdf / docx / txt / md / 图片</div>
@@ -33,7 +34,8 @@
       </div>
       <input type="file" id="folder" webkitdirectory directory multiple hidden>
       <div class="paste-box">
-        <textarea id="paste" rows="3" placeholder="也可以直接粘贴一段表格：从 Excel 复制，或从网页复制 Markdown 表格"></textarea>
+        <textarea id="paste" rows="3" aria-label="粘贴表格数据"
+          placeholder="也可以直接粘贴一段表格：从 Excel 复制，或从网页复制 Markdown 表格"></textarea>
         <button id="pasteBtn" class="btn ghost sm">粘贴导入</button>
       </div>
       <div id="files" class="filelist"></div>
@@ -44,7 +46,7 @@
     </section>
 
     <section class="panel">
-      <h3>4 · 多文件怎么整合</h3>
+      <h2>4 · 多文件怎么整合</h2>
       <div id="mergeHint" class="empty">导入两份以上文件后，这里会给出建议。</div>
       <div id="mergeBox" hidden>
         <div class="row">
@@ -65,7 +67,7 @@
   <div class="col">
 
     <section class="panel">
-      <h3>2 · 从数据库取数（SQL · 只读）</h3>
+      <h2>2 · 从数据库取数（SQL · 只读）</h2>
       <details id="dbDetails">
         <summary class="db-sum">连 SQLite / MySQL / PostgreSQL / SQL Server / Oracle，用 SQL 查出来的数据直接当数据表用</summary>
 
@@ -75,17 +77,17 @@
         </div>
 
         <div class="row">
-          <label>已存连接</label>
+          <label for="dbSaved">已存连接</label>
           <select id="dbSaved"></select>
           <button id="dbDelConn" class="btn ghost sm">删除</button>
         </div>
 
         <div class="row">
-          <label>类型</label>
+          <label for="dbKind">类型</label>
           <select id="dbKind"></select>
         </div>
         <div class="row">
-          <label>连接名</label>
+          <label for="dbConnName">连接名</label>
           <input id="dbConnName" class="txt" placeholder="留空自动取名，如「生产库只读」">
         </div>
 
@@ -103,11 +105,11 @@
           <button id="dbPickFile" class="btn ghost sm">上传 SQLite 库文件</button>
           <input type="file" id="dbFile" accept=".db,.sqlite,.sqlite3,.db3" hidden>
         </div>
-        <div id="dbMsg" class="msg"></div>
+        <div id="dbMsg" class="msg" aria-live="polite"></div>
         <div id="dbTables" class="filelist"></div>
 
         <div class="db-sql-row">
-          <textarea id="dbSql" rows="5" spellcheck="false"
+          <textarea id="dbSql" rows="5" spellcheck="false" aria-label="SQL 查询语句（只读）"
             placeholder="SELECT province AS 省份, SUM(amount) AS 销售额&#10;FROM sales&#10;GROUP BY province&#10;ORDER BY 销售额 DESC"></textarea>
         </div>
         <div class="btns-row">
@@ -115,26 +117,26 @@
           <button id="dbPreview" class="btn ghost sm">只看结果</button>
           <label class="hint"><input type="checkbox" id="dbAutoChart" checked> 顺便预填图表配置</label>
         </div>
-        <div id="dbSqlMsg" class="msg"></div>
+        <div id="dbSqlMsg" class="msg" aria-live="polite"></div>
         <div id="dbResult"></div>
       </details>
     </section>
 
     <section class="panel">
-      <h3>5 · 告诉我你要什么</h3>
+      <h2>5 · 告诉我你要什么</h2>
       <div class="row">
-        <label>报告标题</label>
+        <label for="rTitle">报告标题</label>
         <input id="rTitle" class="txt" value="数据分析报告">
       </div>
       <div class="row">
-        <label>模板</label>
+        <label for="rTpl">模板</label>
         <select id="rTpl">
           <option value="full">完整（指标 + 图表 + 明细 + 来源）</option>
           <option value="simple">精简（指标 + 图表 + 结论）</option>
         </select>
       </div>
       <div class="row">
-        <label>图表版面</label>
+        <label for="rLayout">图表版面</label>
         <select id="rLayout">
           <option value="1">每行 1 张（图最大）</option>
           <option value="2">每行 2 张</option>
@@ -143,7 +145,7 @@
         <span class="hint">并排能一屏看全，单张会相应变小</span>
       </div>
       <div class="row">
-        <label>明细排序</label>
+        <label for="rDetailCol">明细排序</label>
         <select id="rDetailCol">
           <option value="">保持原始顺序（不排序）</option>
         </select>
@@ -154,7 +156,8 @@
         <span class="hint">只作用于报告末尾的明细数据表，不影响图表与源数据</span>
       </div>
       <div class="nl-box">
-        <input id="nl" class="txt" placeholder="一句话说需求，如：按月统计销售额画柱状图降序">
+        <input id="nl" class="txt" aria-label="一句话描述报表需求"
+          placeholder="一句话说需求，如：按月统计销售额画柱状图降序">
         <button id="nlBtn" class="btn ghost sm">解析</button>
       </div>
       <div id="nlMsg" class="hint"></div>
@@ -165,23 +168,23 @@
         <div id="metricCols" class="chips"></div>
       </div>
       <button id="gen" class="btn primary">生成报告</button>
-      <div id="genMsg" class="msg"></div>
+      <div id="genMsg" class="msg" aria-live="polite"></div>
     </section>
   </div>
 
   <div class="col">
 
     <section class="panel">
-      <h3>3 · 数据预览与修正</h3>
+      <h2>3 · 数据预览与修正</h2>
       <div id="empty" class="empty">还没有数据。先导入文件或粘贴一段表格。</div>
       <div id="preview" hidden>
         <div class="row">
-          <label>数据表</label>
+          <label for="dsSelect">数据表</label>
           <select id="dsSelect"></select>
           <button id="delDs" class="btn ghost sm">移除这张</button>
         </div>
         <div class="row">
-          <label>导出</label>
+          <label for="exportKind">导出</label>
           <select id="exportKind" class="auto">
             <option value="csv">CSV（Excel 可直接打开）</option>
             <option value="xlsx">Excel（.xlsx）</option>
@@ -190,7 +193,7 @@
           <span class="hint">导出的是修正后的结果</span>
         </div>
         <div class="row">
-          <label>表头行</label>
+          <label for="headerRow">表头行</label>
           <input id="headerRow" type="number" min="1" value="1" class="num">
           <button id="applyHeader" class="btn ghost sm">应用</button>
           <span class="hint">第几行是列名，改完点应用</span>
@@ -202,16 +205,16 @@
     </section>
 
     <section class="panel">
-      <h3>6 · 数据看板（一屏概览）</h3>
+      <h2>6 · 数据看板（一屏概览）</h2>
       <div class="db-note">看板把上面配好的图 + 指标列排成一屏网格，适合挂屏幕或汇报截图。
         <b>存下来的不是数字，而是「怎么算」</b> —— 之后每次打开都按当前数据重算，看板永远是新的。
         每张图的「宽度」在上面图表卡里选。</div>
       <div class="row">
-        <label>看板名称</label>
+        <label for="dashName">看板名称</label>
         <input id="dashName" class="txt" placeholder="如：销售经营看板">
         <button id="dashSave" class="btn primary sm">保存到看板</button>
       </div>
-      <div id="dashMsg" class="msg"></div>
+      <div id="dashMsg" class="msg" aria-live="polite"></div>
       <div class="subhead">
         <span class="lbl">已存看板</span>
         <button id="dashRefreshList" class="btn ghost sm">刷新列表</button>
@@ -224,9 +227,11 @@
 
 <section class="panel preview">
   <div class="viewbar">
-    <div class="viewtabs">
-      <button class="vtab on" id="tabReport" data-view="report">报告</button>
-      <button class="vtab" id="tabDash" data-view="dash">看板</button>
+    <div class="viewtabs" role="tablist" aria-label="预览视图切换">
+      <button class="vtab on" id="tabReport" data-view="report" role="tab"
+              aria-selected="true" aria-controls="frame">报告</button>
+      <button class="vtab" id="tabDash" data-view="dash" role="tab"
+              aria-selected="false" aria-controls="frame">看板</button>
     </div>
     <span id="outInfo" class="hint">生成后在这里预览</span>
     <span style="flex:1"></span>
@@ -246,22 +251,23 @@
   </div>
   <div id="frameEmpty" class="frame-empty">还没有内容 —— 配好图表后点「生成报告」，或者切到「看板」页签。<br>
     生成好的报告是自包含的单个 HTML 文件，发给别人双击就能看。</div>
-  <iframe id="frame" class="is-empty" src="about:blank"></iframe>
+  <iframe id="frame" class="is-empty" src="about:blank" title="报告 / 看板预览"></iframe>
 </section>
 
 <section class="panel preview">
-  <h3>历史报告</h3>
+  <h2>历史报告</h2>
   <div class="row">
-    <input id="histQ" class="txt" placeholder="搜索报告名（输入即筛）">
+    <input id="histQ" class="txt" type="search" aria-label="搜索报告名" placeholder="搜索报告名（输入即筛）">
     <button id="refreshHist" class="btn ghost sm">刷新</button>
   </div>
   <div class="row">
     <span class="hint" id="outDirHint">输出目录：—</span>
     <span style="flex:1"></span>
+    <button id="histCleanBtn" class="btn ghost sm danger" hidden>清理旧报告</button>
     <button id="cleanupBtn" class="btn ghost sm danger" hidden>清理缓存</button>
-    <span class="hint" id="histCount"></span>
+    <span class="hint" id="histCount" aria-live="polite"></span>
   </div>
-  <div id="histMsg" class="msg"></div>
+  <div id="histMsg" class="msg" aria-live="polite"></div>
   <div id="hist" class="histlist"></div>
 </section>
 
