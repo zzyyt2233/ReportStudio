@@ -11,24 +11,33 @@ goto run
 :runportable
 echo.
 echo   ReportStudio 正在启动（使用包内自带的 Python 运行时）...
-echo   产物目录：%CD%\outputs
-echo   启动后浏览器会自动打开 http://127.0.0.1:8765
-echo   关掉这个黑窗口就会停止服务
-echo.
-"runtime\py\python.exe" app.py
-if errorlevel 1 goto failed
-exit /b 0
+set "PYEXE=runtime\py\python.exe"
+goto serve
 
 :run
 echo.
 echo   ReportStudio 正在启动...
+set "PYEXE=.venv\Scripts\python.exe"
+goto serve
+
+:serve
 echo   产物目录：%CD%\outputs
 echo   启动后浏览器会自动打开 http://127.0.0.1:8765
-echo   关掉这个黑窗口就会停止服务
+echo   服务异常退出会自动重启；关掉这个黑窗口就会彻底停止服务
 echo.
-".venv\Scripts\python.exe" app.py
-if errorlevel 1 goto failed
-exit /b 0
+set RESTARTS=0
+:watchdog
+set "T0=%TIME:~0,5%"
+"%PYEXE%" app.py
+if not errorlevel 1 exit /b 0
+REM 运行超过一分钟才挂的，视为稳定后的偶发崩溃，计数清零；
+REM 一分钟内连续挂 5 次（端口被占、依赖缺失这类），放弃并提示
+if "%TIME:~0,5%"=="%T0%" (set /a RESTARTS+=1) else (set RESTARTS=0)
+if %RESTARTS% GEQ 5 goto failed
+echo.
+echo   服务异常退出，3 秒后自动重启（连续快速失败 %RESTARTS%/5 次）...
+timeout /t 3 /nobreak >nul
+goto watchdog
 
 
 :bootstrap
