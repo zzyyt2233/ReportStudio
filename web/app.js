@@ -69,6 +69,68 @@ async function api(url) {
   } catch (e) { return {}; }
 }
 
+/* ---------- 自绘确认 / 输入弹窗 ----------
+   window.confirm / window.prompt 在内嵌预览窗口（iframe sandbox、部分 webview）
+   里会被静默禁用：点「删除」「清理」什么都不弹、直接 return，
+   看起来就像按钮坏了。这里用原生 <dialog> 自绘（纯 DOM，不受弹窗限制），
+   Promise 化之后调用处 await 一行。jsdom 等不支持 showModal 时降级 open 属性。 */
+function _dlg({ title, body = '', okText = '确定', danger = false, input = null }) {
+  return new Promise(resolve => {
+    const d = document.createElement('dialog');
+    d.className = 'modal' + (danger ? ' danger' : '');
+    const t = document.createElement('p');
+    t.className = 'm-title';
+    t.textContent = title;
+    d.appendChild(t);
+    if (body) {
+      const b = document.createElement('p');
+      b.className = 'm-body';
+      // 报告名、连接名都是用户输入，一律 textContent，不走 innerHTML
+      b.textContent = body;
+      d.appendChild(b);
+    }
+    let inp = null;
+    if (input !== null) {
+      inp = document.createElement('input');
+      inp.className = 'txt';
+      inp.value = input;
+      d.appendChild(inp);
+    }
+    const acts = document.createElement('div');
+    acts.className = 'm-acts';
+    const c = document.createElement('button');
+    c.className = 'btn';
+    c.textContent = '取消';
+    const k = document.createElement('button');
+    k.className = 'btn ' + (danger ? 'danger' : 'primary');
+    k.textContent = okText;
+    acts.appendChild(c);
+    acts.appendChild(k);
+    d.appendChild(acts);
+    let settled = false;
+    const done = val => { if (settled) return; settled = true; resolve(val); d.remove(); };
+    k.onclick = () => done(input !== null ? (inp.value || '') : true);
+    c.onclick = () => done(input !== null ? null : false);
+    d.addEventListener('cancel', () => done(input !== null ? null : false));
+    // Esc 走 cancel；close 是兜底（万一 dialog 被外部 close）
+    d.addEventListener('close', () => done(input !== null ? null : false));
+    if (input !== null) {
+      inp.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); k.onclick(); }
+      });
+    }
+    document.body.appendChild(d);
+    try { d.showModal(); } catch (e) { d.setAttribute('open', ''); }
+    if (inp) { inp.focus(); inp.select(); } else { k.focus(); }
+  });
+}
+function appConfirm(title, body = '', okText = '确定') {
+  return _dlg({ title, body, okText, danger: true });
+}
+function appPrompt(title, def = '') {
+  return _dlg({ title, input: def, okText: '确定' });
+}
+
 function esc(s) {
   return String(s === null || s === undefined ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -235,7 +297,7 @@ function renderFiles() {
 
 $('#clearAll').onclick = async () => {
   if (!Object.keys(STORE).length) return;
-  if (!confirm('确定清空所有已导入的数据表？磁盘上的会话缓存也会一并删除。')) return;
+  if (!await appConfirm('清空所有数据表？', '磁盘上的会话缓存也会一并删除。', '清空')) return;
   await post('/api/session/clear', {}).catch(() => {});
   Object.keys(STORE).forEach(k => delete STORE[k]);
   curId = null; lastOut = null;
@@ -1026,12 +1088,11 @@ function histItem(it) {
 }
 
 async function histDelete(it) {
-  if (!confirm('删除报告「' + it.name + ' ' + it.stamp + '」？\n'
-    + '整个报告目录都会删掉（含图表图片），不可恢复。')) return;
+  if (!(await appConfirm('删除报告「' + it.name + ' ' + it.stamp + '」？',
+    '整个报告目录都会删掉（含图表图片），不可恢复。', '删除'))) return;
   try {
-    const r = await fetch('/api/history?dir=' + encodeURIComponent(it.dir),
-      { method: 'DELETE' });
-    const res = await r.json();
+    // DELETE 方法会被部分代理 / 预览转发层拦下，统一走 POST
+    const res = await post('/api/history/delete', { dir: it.dir });
     toast('histMsg', res.ok ? '已删除报告「' + it.name + '」'
                             : (res.error || '删除失败'), !res.ok);
     renderHistory();
@@ -1136,7 +1197,7 @@ function updateHistCleanBtn(res) {
 
 if ($('#histCleanBtn')) {
   $('#histCleanBtn').onclick = async () => {
-    const input = prompt('清理多少天前的旧报告？（最少保留 7 天，建议 90）', '90');
+    const input = await appPrompt('清理多少天前的旧报告？（最少保留 7 天，建议 90）', '90');
     if (input === null) return;
     const days = parseInt(input, 10);
     if (!days || days < 7) { toast('histMsg', '最少保留 7 天', true); return; }
@@ -1147,7 +1208,8 @@ if ($('#histCleanBtn')) {
     if (!prev.ok) { toast('histMsg', prev.error || '统计失败', true); return; }
     if (!prev.removed) { toast('histMsg', `${days} 天以前没有旧报告，没什么可清的`); return; }
     const sizeTxt = prev.freed ? '、约 ' + fmtSize(prev.freed) : '';
-    if (!confirm(`将删除 ${prev.removed} 份 ${days} 天前的旧报告${sizeTxt}，删掉无法恢复。确定吗？`)) return;
+    if (!await appConfirm('确认清理旧报告？',
+      `将删除 ${prev.removed} 份 ${days} 天前的旧报告${sizeTxt}，删掉无法恢复。`, '删除')) return;
     btn.disabled = true;
     btn.textContent = '清理中…';
     try {
@@ -1510,7 +1572,7 @@ if ($('#dbTest')) {
   $('#dbDelConn').onclick = async () => {
     const name = $('#dbSaved').value;
     if (!name) { dbMsg('先在上一行选一个已存连接', true); return; }
-    if (!confirm('删除连接「' + name + '」？只删这份配置，不动数据库里的任何东西。')) return;
+    if (!await appConfirm('删除连接「' + name + '」？', '只删这份配置，不动数据库里的任何东西。', '删除')) return;
     try {
       const r = await fetch('/api/db/connections?name=' + encodeURIComponent(name),
         { method: 'DELETE' });
@@ -1649,7 +1711,7 @@ async function dashOpen(id) {
 }
 
 async function dashDelete(id, name) {
-  if (!confirm('删除看板「' + name + '」？只删这份配置，数据集和报告都不动。')) return;
+  if (!await appConfirm('删除看板「' + name + '」？', '只删这份配置，数据集和报告都不动。', '删除')) return;
   try {
     const r = await fetch('/api/dashboard/' + encodeURIComponent(id), { method: 'DELETE' });
     const res = await r.json();

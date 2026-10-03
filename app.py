@@ -1135,6 +1135,13 @@ def history_delete(dir: str = ""):
             "error": "" if ok else "删除失败（目录可能正被占用：关掉预览它的窗口再试）"}
 
 
+@app.post("/api/history/delete")
+def history_delete_post(payload: dict):
+    """POST 别名：DELETE 方法会被部分代理 / 预览转发层拦下（405 或不转发）。
+    前端统一走这个入口，逻辑与 DELETE /api/history 完全一致。"""
+    return history_delete(str(payload.get("dir") or ""))
+
+
 _STAMP_RE = re.compile(r"^(.*)_(\d{8})_(\d{6})$")
 
 

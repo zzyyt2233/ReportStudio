@@ -395,7 +395,11 @@ window.__runAsserts = (async function () {
   ok($('#histCount').textContent === '共 3 份 · 5.0 MB',
      '小存量文案同样带体积（实际 ' + $('#histCount').textContent + '）');
 
-  // 点击流程：输入 90 天 → 统计（不删）→ confirm → 真删，共两次 POST
+  // 点击流程：输入 90 天 → 统计（不删）→ 确认 → 真删，共两次 POST。
+  // 产品代码已从原生 confirm/prompt 换成自绘 appConfirm/appPrompt（预览窗口
+  // 会禁用原生弹窗），测试直接覆盖拿固定返回值，不真开 dialog。
+  appConfirm = async () => true;
+  appPrompt = async () => '90';
   window.__HIST_STUB = { ok: true, items: [], total: 0,
                          grand_total: 120, grand_size: 250 * 1024 * 1024 };
   window.__CLEANUP_STUB = { ok: true, removed: 30, freed: 80 * 1024 * 1024, left: 0 };
