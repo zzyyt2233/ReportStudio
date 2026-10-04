@@ -29,6 +29,12 @@ def main():
     ok("没前缀的当明文（兼容老文件）", secret.unprotect("plain-old") == "plain-old")
     ok("密文能被识别出来", secret.is_encrypted(secret.protect("a"))
        and not secret.is_encrypted("a"))
+    # 配置文件是人也会手改的，值不保证是字符串。非字符串一律当明文原样放行，
+    # 不能在读配置这一步就抛 AttributeError 把连接列表整个弄没。
+    for v in (25, 0, True, None, ["a"], {"k": "v"}):
+        ok(f"非字符串 {v!r} 原样穿过（不加密）", secret.protect(v) == v)
+        ok(f"非字符串 {v!r} 原样返回（不解密）", secret.unprotect(v) == v)
+        ok(f"非字符串 {v!r} 不算密文", secret.is_encrypted(v) is False)
 
     # --- 2. 落盘形态 ---
     # 每次开新目录（同 log_rotate 的说明）：不依赖上一轮清干净

@@ -56,13 +56,18 @@ def _from_blob(blob: _Blob) -> bytes:
     return ctypes.string_at(blob.pbData, blob.cbData)
 
 
-def is_encrypted(value: str) -> bool:
-    return bool(value) and value.startswith(PREFIX)
+def is_encrypted(value) -> bool:
+    """是不是本模块写出来的密文。
+
+    故意不要求 str：配置文件是人也会手改的，值不保证是字符串
+    （把密码写成一个数字、一个数组都可能），不是字符串就一律当明文。
+    """
+    return isinstance(value, str) and value.startswith(PREFIX)
 
 
-def protect(text: str) -> str:
+def protect(text):
     """明文 -> 带前缀的密文。空值原样返回；加密失败也退回明文（别把数据弄丢）。"""
-    if not text or not _IS_WINDOWS:
+    if not isinstance(text, str) or not text or not _IS_WINDOWS:
         return text
     src, _keep = _to_blob(text.encode("utf-8"))
     out = _Blob()
@@ -77,13 +82,14 @@ def protect(text: str) -> str:
     return PREFIX + base64.b64encode(enc).decode("ascii")
 
 
-def unprotect(token: str) -> str:
+def unprotect(token):
     """密文 -> 明文。没前缀的当明文（兼容加密之前存的老文件）。
 
     解不开（换机器 / 换了 Windows 账户 / 文件被改过）返回空串 ——
     对调用方来说等同于「这份配置没存密码」，重新输一次即可。
+    非字符串的值（数字、布尔、结构）原样返回：那不是本模块写的东西。
     """
-    if not token or not is_encrypted(token):
+    if not isinstance(token, str) or not token or not is_encrypted(token):
         return token
     if not _IS_WINDOWS:
         return ""
