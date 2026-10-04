@@ -4,31 +4,60 @@
 「生成出错」，用户完全看不出原因。这里是那道底线。
 
 - TestClient 用 raise_server_exceptions=False，后端真崩了会被当成 500 观察到。
-- 报告输出被重定向到 temp/fuzz_out，跑完清掉，不污染正式 outputs。
+- 报告输出被重定向到 temp/fuzz，固定目录名，不污染正式 outputs。
 - 组合用抽样而非全笛卡尔积，否则几百次渲染会把测试拖死。
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import time
 
 from fastapi.testclient import TestClient
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 拿得到 _helpers
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
-import app as server  # noqa: E402
-
 # 报告写到临时目录，别把正式 outputs 塞满。
-# 目录名带进程号+时间戳：这样不需要「先删再建」——受限环境里 rmtree 会被
-# 批量删除守卫拦下（整个命令直接失败），测试不该依赖能删目录这个前提。
-# 积累的旧目录由服务启动时的 cleanup_temp() 按时间清掉。
-FUZZ_OUT = os.path.join(ROOT, "temp", f"fuzz_{os.getpid()}_{int(time.time()) % 100000}")
+# 目录名固定（fuzz），配合 app.py 里的 RS_FUZZ_OUT 开关，出报告时也用固定
+# 子目录名 —— 否则报告目录名带秒级时间戳，每次跑都新开一批，temp/ 会一直涨。
+# 之前这里既没清也没固定，temp/ 下积了 1300 多个这样的目录、总量 1.1GB。
+#
+# 为什么不用 rmtree 删整个目录：受限环境按「一个 turn 累计删除数」拦，
+# 一次跑要出的报告有十几份，删不过来。固定目录名让占用天然有界，
+# 比事后清理更可靠。
+os.environ["RS_FUZZ_OUT"] = "1"
+
+import app as server  # noqa: E402
+from _helpers import can_delete  # noqa: E402
+
+FUZZ_OUT = os.path.join(ROOT, "temp", "fuzz")
 os.makedirs(FUZZ_OUT, exist_ok=True)
 server.OUT_DIR = FUZZ_OUT
+
+# 跑之前先把上一轮留下的清空。不做也没关系 —— 目录名固定，占用天然有界，
+# 只是会多占一点盘。真正的问题是「硬试删除」：受限环境会弹拦截请求，
+# 额度用尽时每跑一次就弹一次，很烦。所以先用 can_delete() 探一下，
+# 额度还在才清，探不到就直接跳过。
+_stale = 0
+if can_delete(FUZZ_OUT):
+    for _f in os.listdir(FUZZ_OUT):
+        _p = os.path.join(FUZZ_OUT, _f)
+        try:
+            if os.path.isdir(_p):
+                shutil.rmtree(_p, ignore_errors=True)
+            else:
+                os.remove(_p)
+        except BaseException:      # noqa: BLE001 受删除额度限制就留着
+            _stale += 1
+    if _stale:
+        print(f"[提示] temp/fuzz 里有 {_stale} 项没能删掉，不影响本轮")
+else:
+    print("[提示] 当前环境已到删除额度上限，跳过 fuzz 目录清理（不影响测试结果）")
 
 client = TestClient(server.app, raise_server_exceptions=False)
 SERVER_ERRORS: list[str] = []
@@ -228,11 +257,6 @@ for fname, content in [
 check(not SERVER_ERRORS, "5 种坏文件无 5xx（应降级为「解析出错」提示）")
 
 clear()
-
-hr("清理 fuzz 输出")
-print(f"  fuzz 报告目录：{FUZZ_OUT}")
-print("  （不做即时删除：受限环境里清理会被守卫拦下；"
-      "这些目录在 temp 下，由服务启动时的 cleanup_temp 按时间回收）")
 
 hr("结果")
 if SERVER_ERRORS:

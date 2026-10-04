@@ -749,7 +749,13 @@ def generate(payload: dict):
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe = re.sub(r'[\\/:*?"<>|]+', "_", spec.title)[:40] or "report"
-    out_dir = os.path.join(OUT_DIR, f"{safe}_{stamp}")
+    # 测试模式下目录名固定：no500 一次跑要出十几份报告，名字都带秒级时间戳的话
+    # 每次跑都新开一批目录，temp/ 会一直涨（实测积到 1.1GB）。固定名字后
+    # 后续跑会直接覆盖同名目录，占用天然有界。正常出报告不受影响。
+    if os.environ.get("RS_FUZZ_OUT"):
+        out_dir = os.path.join(OUT_DIR, "fuzz")
+    else:
+        out_dir = os.path.join(OUT_DIR, f"{safe}_{stamp}")
     os.makedirs(out_dir, exist_ok=True)
 
     img_dir = os.path.join(out_dir, "charts")
