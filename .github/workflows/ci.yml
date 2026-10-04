@@ -31,16 +31,18 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: 装核心依赖
+      - name: 装依赖
         run: |
           python -m pip install --upgrade pip
-          # 数据库驱动单独一行，方便 no-driver 档裁掉
-          grep -vE '^(PyMySQL|pg8000|pyodbc|oracledb)' requirements.txt > /tmp/req-core.txt
-          pip install -r /tmp/req-core.txt
-
-      - name: 装数据库驱动（core）
-        if: matrix.deps == 'core'
-        run: pip install PyMySQL pg8000 pyodbc oracledb
+          # requirements.txt 末尾有一行 `-r requirements-db.txt`，把可选驱动带进来。
+          # core 档照原样装；no-driver 档把那行剔掉，只装核心 ——
+          # 这样「不装驱动也能跑」这条承诺就在 CI 里有真实环境去验。
+          if [ "${{ matrix.deps }}" = "no-driver" ]; then
+            grep -v '^-r requirements-db' requirements.txt > /tmp/req-core.txt
+            pip install -r /tmp/req-core.txt
+          else
+            pip install -r requirements.txt
+          fi
 
       - name: 确认驱动真的没装（no-driver）
         if: matrix.deps == 'no-driver'

@@ -45,13 +45,29 @@ ALIAS = {
 
 
 def declared_names(root: pathlib.Path) -> set[str]:
+    """收集 requirements 里声明的包名。
+
+    依赖拆成了两份（requirements.txt 核心 + requirements-db.txt 可选驱动），
+    两份都要读。`-r xxx.txt` 这种引用行跟着展开，别把它当成包名。
+    """
     names: set[str] = set()
-    text = (root / "requirements.txt").read_text(encoding="utf-8")
-    for line in text.splitlines():
-        # 去掉注释和版本约束，只留包名
-        head = re.split(r"[#<>=!~\[;]", line)[0].strip()
-        if head:
-            names.add(ALIAS.get(head.lower(), head.replace("-", "_")))
+    seen_files: set[str] = set()
+
+    def read(req: pathlib.Path) -> None:
+        if req.name in seen_files or not req.exists():
+            return
+        seen_files.add(req.name)
+        for line in req.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("-r "):
+                read(req.parent / line[3:].strip())
+                continue
+            # 去掉注释和版本约束，只留包名
+            head = re.split(r"[#<>=!~\[;]", line)[0].strip()
+            if head and not head.startswith("-"):
+                names.add(ALIAS.get(head.lower(), head.replace("-", "_")))
+
+    read(root / "requirements.txt")
     return names
 
 
