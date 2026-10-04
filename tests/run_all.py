@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import glob
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -50,6 +51,9 @@ SUITES: list[tuple[str, list[str] | None, bool]] = [
     ("db_readonly", ["tests/db_readonly.py"], False),
     ("dashboard", ["tests/dashboard.py"], False),
     ("check_frontend", ["tests/check_frontend.py"], False),
+    # 顶层 import 的第三方包必须写进 requirements.txt。纯静态检查，
+    # 秒级完成，但挡住的是「照文档装完依赖服务仍起不来」这类问题。
+    ("check_deps", ["tools/check_declared_deps.py"], False),
     ("frontend_logic", None, False),        # node + jsdom
     # 不标 slow：它们只建表不删文件，而且恰恰是最该常跑的几环 ——
     # 「重活跑着的时候服务还通不通」「SESSION 遍历有没有竞态」
@@ -67,21 +71,39 @@ SUITES: list[tuple[str, list[str] | None, bool]] = [
 
 
 def find_node() -> str:
-    """找一个真能执行代码的 node（优先托管版本）。"""
-    pats = [
+    """找一个真能执行代码的 node（优先托管版本）。
+
+    先试 PATH 上的 node —— Linux / CI 上就这么装。Windows 上是托管版本优先，
+    因为系统里那个可能是坏的或版本过低。
+    """
+    cands: list[str] = []
+
+    # PATH 上的（CI、以及把 node 装到系统路径的机器）
+    for name in ("node", "nodejs"):
+        found = shutil.which(name)
+        if found:
+            cands.append(found)
+
+    # Windows：托管版本优先，路径最深的（版本号最大）排前面
+    for pat in [
         os.path.expanduser(r"~\.workbuddy\binaries\node\versions\*\node.exe"),
         r"C:\Program Files\nodejs\node.exe",
         r"C:\Users\*\AppData\Local\Programs\nodejs\node.exe",
-    ]
-    for pat in pats:
-        for p in sorted(glob.glob(pat), reverse=True):
-            try:
-                r = subprocess.run([p, "-e", "console.log('ok')"],
-                                   capture_output=True, timeout=25)
-                if r.returncode == 0 and b"ok" in r.stdout:
-                    return p
-            except Exception:
-                continue
+    ]:
+        cands += sorted(glob.glob(pat), reverse=True)
+
+    seen = set()
+    for p in cands:
+        if p in seen:
+            continue
+        seen.add(p)
+        try:
+            r = subprocess.run([p, "-e", "console.log('ok')"],
+                               capture_output=True, timeout=25)
+            if r.returncode == 0 and b"ok" in r.stdout:
+                return p
+        except Exception:
+            continue
     return ""
 
 

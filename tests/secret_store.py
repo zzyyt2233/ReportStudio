@@ -51,13 +51,23 @@ def main():
         })
         ok("保存成功", saved, note)
         raw = f.read_text(encoding="utf-8")
-        ok("盘上没有明文密码", "SuperSecret123" not in raw)
-        ok("盘上确实带密文前缀", secret.PREFIX in raw)
 
         cfg = store.get("测试库")
         ok("能按名字取回配置", cfg is not None)
         ok("内存里的密码是明文（能拿去连库）", cfg is not None
            and cfg.password == "SuperSecret123")
+
+        # 落盘形态按平台分开断言：DPAPI 是 Windows 自带的，其它平台上
+        # secret.protect 原样返回，所以「盘上必须是密文」这条只在 Windows 成立。
+        # 这里不整组跳过 —— 跳过就意味着非 Windows 的 CI 在这块是空白门禁。
+        if secret._IS_WINDOWS:
+            ok("盘上没有明文密码", "SuperSecret123" not in raw)
+            ok("盘上确实带密文前缀", secret.PREFIX in raw)
+        else:
+            ok("非 Windows 平台不加密（原样落盘）", "SuperSecret123" in raw)
+            ok("非 Windows 平台也不加前缀", secret.PREFIX not in raw)
+            ok("非 Windows 平台读回来仍是完整明文", cfg is not None
+               and cfg.password == "SuperSecret123")
 
         pub2 = store.list_public()
         ok("公开清单只报「有没有密码」",
