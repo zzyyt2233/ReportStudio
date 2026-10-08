@@ -46,6 +46,10 @@ SUITES: list[tuple[str, list[str] | None, bool]] = [
     ("demo_data", ["tests/demo_data.py"], False),
     ("pdf_extract", ["tests/pdf_extract.py"], False),
     ("vision_config", ["tests/vision_config.py"], False),
+    # 配置向导生成的 YAML 必须能被服务端原样读回：向导拼 YAML 的转义、
+    # yaml 解析、core.config.load 三方对账。api_key 带引号/反斜杠/=/# 等
+    # 特殊字符逐一验过。全程写项目 temp/ 下的临时目录，不碰真实配置。
+    ("setup_wizard", ["tests/setup_wizard.py"], False),
     # LLM 熔断器回归：服务挂了不能让每个请求各等一遍超时把线程池占满。
     # 不发真实网络（指向没监听的本地端口 + monkeypatch load），纯逻辑，秒级。
     # 以前漏收进 SUITES —— 等于这个容错路径从没被回归守过，现在补上。
