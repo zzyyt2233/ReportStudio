@@ -167,6 +167,12 @@ def test_zoom_and_data_table(client) -> None:
         ok("能导出 CSV", "zbSaveCsv" in html)
         ok("CSV 带 BOM（否则 Excel 打开中文乱码）", r"\ufeff" in html)
         ok("放大后能按类目缩放", "dataZoom" in html)
+        ok("网格小图直接支持 Ctrl+滚轮缩放与拖拽平移",
+           "_smallOpt" in html and "zoomOnMouseWheel:'ctrl'" in html)
+        ok("每张图都有「重置」恢复初始视野",
+           all(f'onclick="zoomReset({i})"' in html for i in range(2)))
+        ok("小图经 _smallOpt 注入 inside 缩放后才 setOption",
+           "_smallOpt(OPTS[0])" in html)
 
         arr = _arrays(html)
         ok("三个数组都注入成功", all(arr[k] is not None for k in arr), str(list(arr)))

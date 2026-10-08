@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import itertools
 import os
+import shutil
 import sys
 import time
 
@@ -68,6 +69,7 @@ def isolate_dashboards() -> str:
     from core import dashboard as dashmod
     d = os.path.join(ROOT, "temp", "dashboards_test")
     os.makedirs(d, exist_ok=True)
+    _purge_dir(d)
     cfgmod.dashboards_dir = lambda: d          # type: ignore[assignment]
 
     _n = itertools.count(1)
@@ -207,6 +209,9 @@ def can_delete(probe_dir: str = "") -> bool:
             f.write("x")
         os.remove(p)
     except BaseException:
+        # 这里不回收探针：删除被拦的情况下改名同样会被拦（改名也是删除+创建），
+        # 加一层 try 只是让代码看起来做了件事。留下的探针是 0 字节的小文件，
+        # 危害远小于 fuzz 那种一次 25MB 的泄漏。
         return False
     return not os.path.exists(p)
 
@@ -218,6 +223,52 @@ def remove_file(path: str) -> None:
             os.remove(path)
     except BaseException:
         pass
+
+
+def rmtree_quiet(path: str) -> bool:
+    """删目录，并且吞掉守卫抛出的 SystemExit。
+
+    受限环境拦下删除时抛的是 SystemExit —— `ignore_errors=True` 只认 OSError，
+    这个会直接穿出去，把测试进程的退出码变成 1，run_all 就把它判成 FAIL。
+    清理失败无非留点临时文件，不该算测试失败。
+    """
+    try:
+        shutil.rmtree(path, ignore_errors=True)
+    except BaseException:            # noqa: BLE001
+        return False
+    return not os.path.exists(path)
+
+
+def _purge_dir(path: str) -> int:
+    """清空一个测试专用目录，返回没能删掉的项数。
+
+    为什么需要它：app.py 里的删除在受限环境会被拦，退化成改名成 `*.deleted`
+    （见 _safe_unlink），文件没消失只是换了后缀。而残片回收只在用户点按钮时
+    才跑，测试走的是 TestClient 不是真服务，所以没人触发 —— temp/ 下就攒下
+    36MB 的 .deleted。跑之前清一次最省事，也不用去动 app 的删除逻辑。
+
+    先用 can_delete() 探额度：额度用尽时硬试会弹拦截请求，每跑一次测试弹一次，
+    很烦。探不到就直接不删 —— 反正目录名固定，残留不会越攒越多。
+    """
+    if not can_delete(path):
+        return -1                      # -1 表示「没试」，调用方按「跳过」处理
+    left = 0
+    try:
+        entries = os.listdir(path)
+    except BaseException:            # noqa: BLE001
+        return 0
+    for name in entries:
+        p = os.path.join(path, name)
+        try:
+            if os.path.isdir(p):
+                shutil.rmtree(p, ignore_errors=True)
+                if os.path.exists(p):
+                    left += 1
+            else:
+                os.remove(p)
+        except BaseException:        # noqa: BLE001 受删除额度限制就留着
+            left += 1
+    return left
 
 
 def ok(label: str, cond: bool, detail: str = "") -> bool:

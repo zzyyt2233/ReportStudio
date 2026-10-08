@@ -59,7 +59,8 @@ const CALLS = [];
 window.__CALLS = CALLS;
 window.fetch = async (url, opt) => {
   const u = String(url);
-  CALLS.push({ url: u, method: (opt && opt.method) || 'GET' });
+  CALLS.push({ url: u, method: (opt && opt.method) || 'GET',
+               body: (opt && opt.body) || null });
 
   if (u.indexOf('/api/status') >= 0) {
     return jsonResponse({ ok: true, llm: false, datasets: 0, persist: true });
@@ -103,6 +104,24 @@ window.fetch = async (url, opt) => {
                           missing: [], url: '/dashboards/_preview.html?_t=1' });
   }
   if (u.indexOf('/api/datasets') >= 0) return jsonResponse({ ok: true, items: [] });
+  /* 「载入示例数据」按钮走的也是 /api/paste，回一份和真实导入同形状的数据集，
+     否则按钮的回调会在 res.dataset.id 上炸掉，测出来的就是个假失败。 */
+  if (u.indexOf('/api/paste') >= 0) {
+    return jsonResponse({
+      ok: true,
+      dataset: {
+        id: 'demo', name: '示例数据 · 保费月报', source_type: 'paste',
+        total_rows: 36, warnings: [],
+        columns: [{ name: '月份', dtype: 'date' }, { name: '区域', dtype: 'text' },
+                  { name: '产品线', dtype: 'text' },
+                  { name: '保费收入(万元)', dtype: 'number' },
+                  { name: '保单件数', dtype: 'number' },
+                  { name: '赔付率(%)', dtype: 'number' }],
+        rows: [{ '月份': '2026-01', '区域': '华东', '产品线': '车险',
+                 '保费收入(万元)': 4210, '保单件数': 1520, '赔付率(%)': 61.2 }],
+      },
+    });
+  }
   /* 注意顺序：'/api/history/cleanup' 要放在 '/api/history' 之前判断。
      返回值可用 window.__CLEANUP_STUB / window.__HIST_STUB 注入，供存量管理断言用。 */
   if (u.indexOf('/api/history/cleanup') >= 0) {

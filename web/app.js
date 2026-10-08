@@ -271,6 +271,59 @@ $('#pasteBtn').onclick = async () => {
   renderFiles(); renderDsSelect(); renderMerge(); renderChartsPanel();
 };
 
+/* 第一次用的人（尤其是拿到分享包的）手上没有现成数据，打开是空的，看不出能干什么。
+   塞一份内置的保费月报进去 —— 时间、区域、产品线三个维度，三个指标，
+   点一下就能出图、出报告。走的是「粘贴导入」同一条链路，没有额外的后端逻辑。 */
+const DEMO_TABLE = [
+  '| 月份 | 区域 | 产品线 | 保费收入(万元) | 保单件数 | 赔付率(%) |',
+  '| --- | --- | --- | --- | --- | --- |',
+  '| 2026-01 | 华东 | 车险 | 4210 | 1520 | 61.2 |',
+  '| 2026-01 | 华东 | 健康险 | 1860 | 940 | 48.3 |',
+  '| 2026-01 | 华北 | 车险 | 3120 | 1130 | 64.5 |',
+  '| 2026-01 | 华北 | 健康险 | 1420 | 720 | 51.2 |',
+  '| 2026-01 | 华南 | 车险 | 2580 | 930 | 66.8 |',
+  '| 2026-01 | 华南 | 健康险 | 1150 | 580 | 54.6 |',
+  '| 2026-02 | 华东 | 车险 | 4380 | 1580 | 62.4 |',
+  '| 2026-02 | 华东 | 健康险 | 1920 | 970 | 49.1 |',
+  '| 2026-02 | 华北 | 车险 | 3050 | 1100 | 65.2 |',
+  '| 2026-02 | 华北 | 健康险 | 1510 | 760 | 52.4 |',
+  '| 2026-02 | 华南 | 车险 | 2640 | 950 | 67.5 |',
+  '| 2026-02 | 华南 | 健康险 | 1210 | 610 | 55.8 |',
+  '| 2026-03 | 华东 | 车险 | 4520 | 1640 | 60.8 |',
+  '| 2026-03 | 华东 | 健康险 | 2050 | 1040 | 47.6 |',
+  '| 2026-03 | 华北 | 车险 | 3280 | 1190 | 63.8 |',
+  '| 2026-03 | 华北 | 健康险 | 1580 | 800 | 50.7 |',
+  '| 2026-03 | 华南 | 车险 | 2710 | 980 | 66.1 |',
+  '| 2026-03 | 华南 | 健康险 | 1280 | 650 | 54.1 |',
+  '| 2026-04 | 华东 | 车险 | 4460 | 1610 | 63.1 |',
+  '| 2026-04 | 华东 | 健康险 | 2180 | 1100 | 50.2 |',
+  '| 2026-04 | 华北 | 车险 | 3410 | 1240 | 66.1 |',
+  '| 2026-04 | 华北 | 健康险 | 1620 | 820 | 53.1 |',
+  '| 2026-04 | 华南 | 车险 | 2690 | 970 | 68.2 |',
+  '| 2026-04 | 华南 | 健康险 | 1340 | 680 | 56.4 |',
+  '| 2026-05 | 华东 | 车险 | 4780 | 1730 | 61.9 |',
+  '| 2026-05 | 华东 | 健康险 | 2240 | 1130 | 48.8 |',
+  '| 2026-05 | 华北 | 车险 | 3390 | 1230 | 64.9 |',
+  '| 2026-05 | 华北 | 健康险 | 1710 | 860 | 51.8 |',
+  '| 2026-05 | 华南 | 车险 | 2830 | 1020 | 67.0 |',
+  '| 2026-05 | 华南 | 健康险 | 1390 | 700 | 55.2 |',
+  '| 2026-06 | 华东 | 车险 | 5010 | 1820 | 62.6 |',
+  '| 2026-06 | 华东 | 健康险 | 2390 | 1210 | 49.5 |',
+  '| 2026-06 | 华北 | 车险 | 3560 | 1290 | 65.4 |',
+  '| 2026-06 | 华北 | 健康险 | 1790 | 910 | 52.6 |',
+  '| 2026-06 | 华南 | 车险 | 2950 | 1070 | 67.6 |',
+  '| 2026-06 | 华南 | 健康险 | 1460 | 740 | 55.9 |',
+].join('\n');
+
+$('#demoBtn').onclick = async () => {
+  const res = await post('/api/paste', { text: DEMO_TABLE, name: '示例数据 · 保费月报' });
+  if (!res.ok) { toast('genMsg', res.error || '载入示例数据失败', true); return; }
+  STORE[res.dataset.id] = res.dataset;
+  curId = res.dataset.id;
+  renderFiles(); renderDsSelect(); renderMerge(); renderChartsPanel();
+  toast('genMsg', '已载入示例数据（6 个月 × 3 区域 × 2 条产品线），右侧可以直接选图表或生成报告');
+};
+
 function renderFiles() {
   const box = $('#files');
   box.innerHTML = '';
@@ -540,7 +593,7 @@ function fillChartCard(el, ds, spec) {
               : (dims.indexOf(all[0]) >= 0 ? all[0] : (dims[0] || all[0]));
   x.innerHTML = xOptions(ds, dims, roles.measures || [], wantX);
   let ys = (spec.y || []).filter(n => nums.indexOf(n) >= 0);
-  if (!ys.length) ys = nums.slice(0, 1);
+  if (!ys.length) ys = defaultYs(ds, nums);
   const mea = new Set(roles.measures || []);
   el.querySelector('.c-y').innerHTML = nums.map(n =>
     `<button type="button" class="chip${ys.indexOf(n) >= 0 ? ' on' : ''}" data-n="${esc(n)}"
@@ -588,6 +641,14 @@ function rolesOf(ds) {
     dimensions: cols.filter(c => c.dtype !== 'number').map(c => c.name),
     measures: cols.filter(c => c.dtype === 'number').map(c => c.name),
   };
+}
+
+/* 没指定指标时的默认勾选。图片识别出的多系列图表，系列本身就是用户想要的
+   指标，默认全带上（至多 4 个，再多图也没法看）；普通表格数值列可能十几列，
+   全选没法看，只带第一个。 */
+function defaultYs(ds, nums) {
+  if (ds && ds.source_type === 'image') return nums.slice(0, 4);
+  return nums.slice(0, 1);
 }
 
 /* 横轴下拉：维度候选（推荐）与度量候选分组标注。
@@ -1422,13 +1483,20 @@ function dbFillFromSaved() {
   $('#dbKind').value = c.kind;
   Object.keys(c).forEach(k => {
     if (k === 'name' || k === 'kind' || k === 'has_password') return;
+    // 这两个是状态标记，不是连接字段，别塞进表单
+    if (k === 'password_lost' || k === 'password_note') return;
     dbForm[c.kind + '.' + k] = String(c[k]);
   });
   renderDbFields();
   $('#dbConnName').value = c.name;
-  dbMsg(c.has_password
-    ? '已载入「' + c.name + '」，密码留空即沿用保存的那个'
-    : '已载入「' + c.name + '」（没记密码，需要重新填）');
+  if (c.password_lost) {
+    // 密码是 DPAPI 密文存的，换机器或换 Windows 账户就解不开了
+    dbMsg(c.password_note || '这份配置保存的密码在当前账户下解不开，请重新填写', true);
+  } else {
+    dbMsg(c.has_password
+      ? '已载入「' + c.name + '」，密码留空即沿用保存的那个'
+      : '已载入「' + c.name + '」（没记密码，需要重新填）');
+  }
 }
 
 function renderDbTables(tables) {

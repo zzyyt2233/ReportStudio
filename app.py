@@ -749,7 +749,13 @@ def generate(payload: dict):
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe = re.sub(r'[\\/:*?"<>|]+', "_", spec.title)[:40] or "report"
-    out_dir = os.path.join(OUT_DIR, f"{safe}_{stamp}")
+    # 测试模式下目录名固定：no500 一次跑要出十几份报告，名字都带秒级时间戳的话
+    # 每次跑都新开一批目录，temp/ 会一直涨（实测积到 1.1GB）。固定名字后
+    # 后续跑会直接覆盖同名目录，占用天然有界。正常出报告不受影响。
+    if os.environ.get("RS_FUZZ_OUT"):
+        out_dir = os.path.join(OUT_DIR, "fuzz")
+    else:
+        out_dir = os.path.join(OUT_DIR, f"{safe}_{stamp}")
     os.makedirs(out_dir, exist_ok=True)
 
     img_dir = os.path.join(out_dir, "charts")
@@ -1030,6 +1036,26 @@ def _split_stamp(name: str) -> tuple[str, str]:
 # 新增文件会更新目录 mtime，缓存自动失效重建。
 _HIST_CACHE: dict[str, dict] = {}     # 目录名 -> {"mtime": float, "entry": dict}
 
+# 整包响应缓存：outputs 目录清单的指纹（报告数 + 各目录 mtime 之和）不变，
+# 说明既没有报告增删、也没有哪份报告被重新生成（重生会写文件、推高子目录
+# mtime），这时整个 /api/history 响应可以直接复用，连每目录一次的 stat 都省掉。
+# scandir 在 Windows 上枚举目录时自带 mtime，取指纹本身不再额外发系统调用。
+_HIST_RESP: dict = {"fp": None, "hits": {}}
+
+
+def _outputs_fp() -> tuple:
+    count, msum = 0, 0.0
+    try:
+        with os.scandir(OUT_DIR) as it:
+            for e in it:
+                if e.name.endswith((".deleted", ".tmp")) or not e.is_dir():
+                    continue
+                count += 1
+                msum += e.stat().st_mtime
+    except OSError:
+        pass
+    return (count, round(msum, 2))
+
 
 def _history_entry(name: str, d: str) -> dict | None:
     """构建（或取缓存的）一个报告目录的列表条目。不是报告返回 None。"""
@@ -1070,6 +1096,7 @@ def _history_entry(name: str, d: str) -> dict | None:
 def _hist_cache_drop(name: str) -> None:
     with _LOCK:
         _HIST_CACHE.pop(name, None)
+        _HIST_RESP["fp"] = None      # 有条目失效，整包缓存一并作废
 
 
 @app.get("/api/history")
@@ -1086,6 +1113,16 @@ def history(q: str = "", limit: int = 50):
         limit = max(1, min(int(limit or 50), 300))
     except (TypeError, ValueError):
         limit = 50
+
+    fp = _outputs_fp()
+    with _LOCK:
+        if _HIST_RESP["fp"] == fp:
+            hit = _HIST_RESP["hits"].get((kw, limit))
+            if hit is not None:
+                return hit
+        else:
+            _HIST_RESP["fp"] = fp
+            _HIST_RESP["hits"] = {}
 
     items, matched = [], 0
     # grand_* 是「outputs 里全部报告」的份数和体积，不受 q 过滤影响——
@@ -1112,8 +1149,13 @@ def history(q: str = "", limit: int = 50):
         if len(items) >= limit:
             continue          # 已经够了，但继续数 matched，好让前端说「共 N 份」
         items.append(entry)
-    return {"items": items, "total": matched, "filtered": bool(kw),
+    resp = {"items": items, "total": matched, "filtered": bool(kw),
             "grand_total": grand_total, "grand_size": grand_size}
+    with _LOCK:
+        # 指纹在构建期间又变了（有报告增删）就不落缓存，宁缺毋滥
+        if _HIST_RESP["fp"] == fp:
+            _HIST_RESP["hits"][(kw, limit)] = resp
+    return resp
 
 
 @app.delete("/api/history")
@@ -1569,6 +1611,14 @@ if __name__ == "__main__":
     import webbrowser
 
     import uvicorn
+
+    from core import logsetup
+
+    # 双击启动时输出只打在黑窗口里，关掉就没了。复制一份进 logs/app.log，
+    # 超 5MB 自动归档 —— 用户报「打不开/闪退」时至少有东西可查。
+    # uvicorn 自己也是往 stderr 写的，跟着一起进文件。
+    logsetup.install()
+    logsetup.rotate_error_log()
 
     # 清理放后台线程：它跟「把服务起来」没有任何关系，不该堵在启动路径上。
     # 实测代价不小 —— 每个删除在某些环境下要走一遍守卫检查（本机 1~3 秒一个），

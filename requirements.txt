@@ -1,3 +1,6 @@
+# 核心依赖：不装这些服务起不来。
+# 安装：pip install -r requirements.txt
+
 fastapi>=0.115
 uvicorn>=0.32
 python-multipart>=0.0.9
@@ -10,10 +13,11 @@ python-docx>=1.1
 reportlab>=4.2
 matplotlib>=3.9
 requests>=2.32
+# Pillow 是硬依赖：core/render/combine.py 在模块顶层 import，而 app.py 又顶层
+# import 它，所以启动时就要求它在。此前一直靠 matplotlib / reportlab 间接带入，
+# 没有显式声明 —— 哪天上游换掉这条链就变成「装上依赖仍起不来」。
+Pillow>=10.0
 
-# 数据库取数（只读）。SQLite 走标准库，不需要装。
-# 这四家按需装：装了哪个就能连哪个，没装的类型在界面上会明确提示缺驱动。
-PyMySQL>=1.1          # MySQL / MariaDB
-pg8000>=1.31          # PostgreSQL
-pyodbc>=5.1           # SQL Server（另需系统装 ODBC Driver for SQL Server）
-oracledb>=2.0         # Oracle（thin 模式，无需装 Oracle 客户端）
+# 数据库驱动是可选依赖，单独一份：不装也能启动，只是连不了那几种库。
+# 要一次性装齐就保留这行；只想要核心依赖就把这行注释掉。
+-r requirements-db.txt

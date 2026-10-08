@@ -1,0 +1,14 @@
+# 数据库取数（只读）用的驱动。装了哪个就能连哪个。
+#
+# 这些是**可选的**：一个都不装，服务照样启动、界面照样能用，
+# SQLite 走标准库不需要驱动，其余四种在连接时会明确提示缺哪个包。
+#
+# 单独拆成文件而不是塞在 requirements.txt 里，是为了让「可选」这件事
+# 在结构上就看得出，而不是只靠注释说明。CI 和分享包可以只装核心依赖。
+#
+# 系统依赖提醒：SQL Server 走 pyodbc，另需系统装 ODBC Driver for SQL Server。
+
+PyMySQL>=1.1          # MySQL / MariaDB
+pg8000>=1.31          # PostgreSQL
+pyodbc>=5.1           # SQL Server
+oracledb>=2.0         # Oracle（thin 模式，无需装 Oracle 客户端）

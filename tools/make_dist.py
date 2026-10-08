@@ -104,9 +104,13 @@ README_TXT = """ReportStudio 多源数据图表报告工具 —— 第一次使�
 
 【三、可选：接入大模型（图片识别 / 智能分析更准）】
     不配也能用，只是图片解析会退化。
-    要配的话，把 config.yaml 复制一份改名为  config.local.yaml ，
-    在里面填上你的 base_url / api_key / model。
-    config.local.yaml 不会被上传、也不会被打包发出去，只在你本机生效。
+    要配的话：双击  配置向导.bat ，按提示填接口地址、API Key、模型名，
+    向导会自己写好配置并测试连通性，配完重启服务生效。
+    （也可以手动把 config.yaml 复制一份改名为 config.local.yaml 来填，
+    两种写法效果一样。config.local.yaml 不会被上传、也不会被打包发出去。）
+
+    如果分享者给你的是「已预置大模型」的包，这一步什么都不用做，
+    开箱即用。
 
 
 【四、常见问题】
@@ -229,6 +233,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="打一个可发给别人的分发包")
     ap.add_argument("--portable", action="store_true",
                     help="免安装版：把 Python 运行时和依赖一起打进包里")
+    ap.add_argument("--with-llm-config", action="store_true",
+                    help="把本机 config.local.yaml（含 API Key）一起打进包："
+                         "收件人开箱即用，但 Key 会随包流出，只发给信得过的人")
     ap.add_argument("--out", default="", help="输出目录，默认 dist/")
     ap.add_argument("--name", default="", help="压缩包名，默认 ReportStudio-日期")
     args = ap.parse_args()
@@ -249,10 +256,22 @@ def main() -> int:
     TOP = "ReportStudio"
     total = 0
     rt_n = 0
+    baked_llm = False
+    if args.with_llm_config:
+        local_cfg = ROOT / "config.local.yaml"
+        if local_cfg.exists():
+            baked_llm = True
+            print("  [注意] 将把 config.local.yaml（含 API Key）打进包里，"
+                  "收件人开箱即用，但 Key 会随包流出。")
+        else:
+            print("  [警告] 没有找到 config.local.yaml，--with-llm-config 不生效。")
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
         for src, rel in files:
             z.write(src, f"{TOP}/{rel}")
             total += src.stat().st_size
+        if baked_llm:
+            z.write(local_cfg, f"{TOP}/config.local.yaml")
+            total += local_cfg.stat().st_size
         if has_runtime:
             py_root = out_dir / "_rt" / "py"
             for p in sorted(py_root.rglob("*")):
@@ -278,8 +297,11 @@ def main() -> int:
                             if has_runtime else "需系统 Python 3.10+ 且首次联网装依赖"))
     print("=" * 60)
     print()
+    if baked_llm:
+        print("已预置：config.local.yaml（大模型配置，收件人开箱即用，注意 Key 随包流出）")
     print("已排除：.venv/、outputs/、session/、temp/、logs/、dashboards/、")
-    print("        db_connections.json（数据库密码）、config.local.yaml（API key）")
+    print("        db_connections.json（数据库密码）" +
+          ("、config.local.yaml（API key）" if not baked_llm else ""))
     return 0
 
 

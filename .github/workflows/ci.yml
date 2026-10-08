@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regression:
+    name: 全量回归（${{ matrix.os }} / ${{ matrix.deps }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      # 两档的差别只在数据库驱动：
+      #   core —— 装齐 requirements.txt，含四家数据库驱动；
+      #   no-driver —— 只装核心依赖，验证「不装驱动也能启动、能跑完整回归」。
+      # 驱动是函数内延迟 import 的设计（core/db/connect.py），
+      # 这个承诺必须有门禁守着，否则某次改动把它挪到模块顶层就静悄悄地破了。
+      # 两个 os 是因为 Windows 上的 DPAPI 凭据加密路径（secret_store 里
+      # 「盘上必须是密文」那组断言）之前只在 ubuntu 验过「不加密」分支，
+      # Windows 分支从没在 CI 跑过 —— 加 windows-latest 才真正守住了加密承诺。
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        deps: [core, no-driver]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+        # 前端逻辑断言（100 项）靠 jsdom 跑在 node 上。ubuntu / windows runner
+        # 都自带 node，但这里显式 pin 一版，保证 jsdom 装得上、版本稳定。
+
+      - name: 装依赖
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          # requirements.txt 末尾有一行 `-r requirements-db.txt`，把可选驱动带进来。
+          # core 档照原样装；no-driver 档把那行剔掉，只装核心 ——
+          # 这样「不装驱动也能跑」这条承诺就在 CI 里有真实环境去验。
+          if [ "${{ matrix.deps }}" = "no-driver" ]; then
+            grep -v '^-r requirements-db' requirements.txt > req-core.txt
+            pip install -r req-core.txt
+          else
+            pip install -r requirements.txt
+          fi
+
+      - name: 确认驱动真的没装（no-driver）
+        if: matrix.deps == 'no-driver'
+        shell: bash
+        run: |
+          for p in pymysql pg8000 pyodbc oracledb; do
+            if python -c "import $p" 2>/dev/null; then
+              echo "::error::$p 不该出现在 no-driver 环境里"
+              exit 1
+            fi
+          done
+          echo "已确认：四家数据库驱动均未安装"
+
+      - name: 装前端测试依赖（jsdom）
+        # 不装也能跑，但那 100 项前端断言会直接静默跳过 —— 门禁就空了。
+        # windows runner 默认 shell 是 PowerShell，显式 shell: bash 让 npm 走 Git Bash。
+        shell: bash
+        run: npm install --no-save jsdom
+
+      - name: 全量回归
+        shell: bash
+        run: python tests/run_all.py
+
+  declared-deps:
+    name: 依赖声明一致性
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 顶层 import 的第三方包必须在 requirements.txt 里声明
+        # 这条门禁是有来由的：Pillow 曾被 core/render/combine.py 顶层 import，
+        # 却只靠 matplotlib / reportlab 间接带进来，requirements.txt 里没写。
+        # 间接依赖一旦断链，用户就会遇到「照文档装完依赖，服务还是起不来」。
+        # 只查顶层 import —— 函数内的延迟 import 就是刻意的可选依赖，不算漏声明。
+        run: python tools/check_declared_deps.py

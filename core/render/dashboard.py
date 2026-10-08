@@ -97,6 +97,10 @@ button.dl.on{background:var(--accent);color:#fff;border-color:var(--accent)}
 button.dl:disabled{opacity:.4;cursor:not-allowed}
 button.dl:disabled:hover{border-color:var(--line);color:var(--ink2)}
 button.zo{padding:2px 9px;font-size:11px}
+/* 交互提示平时不占视觉：悬停卡片才浮现，触屏（没有 Ctrl/滚轮）直接不显示 */
+.zhint{font-size:11px;color:var(--ink2);opacity:0;transition:opacity .15s;white-space:nowrap}
+.chart-card:hover .zhint{opacity:1}
+@media (hover:none){.zhint{display:none}}
 .zb table{border-collapse:collapse;font-size:12px;background:var(--card);width:100%}
 .zb th,.zb td{border:1px solid var(--line);padding:5px 10px;white-space:nowrap}
 .zb th{position:sticky;top:0;background:#F1EFE8;text-align:left;z-index:1}
@@ -122,6 +126,30 @@ function _esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').rep
 var zbInst = null, zbCur = -1;
 
 function _clone(o){ return JSON.parse(JSON.stringify(o)); }
+
+/* 网格小图的交互：Ctrl+滚轮缩放、左键拖拽平移（Google Maps 同款约定）。
+   为什么用 Ctrl 修饰而不是直接滚轮：看板是长页面，滚轮的第一职责是翻页，
+   直接劫持滚轮会变成「想滚页面却放大了图」。Ctrl+滚轮浏览器原生是页面缩放，
+   echarts 命中后会 preventDefault 拦下，不会两头发作。
+   注意这是函数声明，会被提升到整个 script 顶部 —— 前面 CH 初始化循环
+   先于本段执行也能调到它，别改成 var 赋值的形式。 */
+function _smallOpt(o){
+  var c = _clone(o), s = (c.series||[])[0] || {}, t = s.type;
+  if (t === 'pie') return c;            // 饼图没有轴，缩放无从谈起
+  var dz = [{type:'inside', zoomOnMouseWheel:'ctrl',
+             moveOnMouseMove:true, moveOnMouseWheel:false}];
+  if (t === 'scatter'){
+    dz[0].filterMode = 'none';
+    dz.push({type:'inside', yAxisIndex:0, filterMode:'none',
+             zoomOnMouseWheel:'ctrl', moveOnMouseMove:true, moveOnMouseWheel:false});
+  }
+  c.dataZoom = (c.dataZoom || []).concat(dz);
+  return c;
+}
+
+/* 「重置」恢复初始视野。restore 会连图例开关一起还原 —— 这正是用户
+   点重置时想要的结果，不用费力只清 dataZoom。 */
+function zoomReset(i){ if (CH[i]) CH[i].dispatchAction({type:'restore'}); }
 
 function _zoomOpt(o){
   var c = _clone(o), s = (c.series||[])[0] || {}, t = s.type;
@@ -548,6 +576,8 @@ def build_dashboard_html(title: str, subtitle: str, datasets: list[Dataset],
                 f'<div class="rz rz-w" data-i="{i}" title="拖拽调整宽度"></div>'
                 f'<div class="rz rz-h" data-i="{i}" title="拖拽调整高度"></div>'
                 f'<div class="hd"><span>{_esc(b.get("title") or f"图表 {i + 1}")}</span>'
+                f'<span class="zhint">Ctrl+滚轮缩放 · 拖拽平移</span>'
+                f'<button class="dl zo" onclick="zoomReset({i})">重置</button>'
                 f'<button class="dl zo" onclick="zoomChart({i})">放大</button>'
                 f'<button class="dl zo" onclick="dlChart({i})">存 PNG</button></div>'
                 f'<div class="chart" id="chart{i}" style="height:{height}px"></div></div>')
@@ -596,7 +626,7 @@ def build_dashboard_html(title: str, subtitle: str, datasets: list[Dataset],
     for i in range(len(chart_blocks)):
         parts.append(
             f"CH[{i}]=echarts.init(document.getElementById('chart{i}'));"
-            f"CH[{i}].setOption(OPTS[{i}]);"
+            f"CH[{i}].setOption(_smallOpt(OPTS[{i}]));"
             f"window.addEventListener('resize',function(){{CH[{i}].resize();}});")
 
     parts.append(_JS_TAIL)

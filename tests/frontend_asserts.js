@@ -412,5 +412,43 @@ window.__runAsserts = (async function () {
   ok($('#histMsg').textContent.indexOf('已清理 30 份') === 0,
      'toast 汇报清理结果和释放量（实际 ' + $('#histMsg').textContent + '）');
 
+  // 21 · 图片识别数据集的默认指标：多系列全带上，普通表格只带第一个
+  const imgDs = { source_type: 'image',
+                  columns: [{ name: '月份', dtype: 'text' },
+                            { name: '销售额', dtype: 'number' },
+                            { name: '利润', dtype: 'number' },
+                            { name: '成本', dtype: 'number' }] };
+  ok(JSON.stringify(defaultYs(imgDs, ['销售额', '利润', '成本'])) ===
+     JSON.stringify(['销售额', '利润', '成本']),
+     '图片识别的多系列图表默认勾选全部系列');
+  const imgDs5 = { source_type: 'image', columns: [] };
+  ok(defaultYs(imgDs5, ['a', 'b', 'c', 'd', 'e']).length === 4,
+     '系列超过 4 个时只带前 4 个');
+  const tblDs = { source_type: 'excel', columns: [] };
+  ok(JSON.stringify(defaultYs(tblDs, ['销售额', '利润'])) ===
+     JSON.stringify(['销售额']),
+     '普通表格仍只默认带第一个数值列');
+
+  // 22 · 一键示例数据：拿到分享包的人手上没数据，点一下就该出图
+  const beforeDemo = __CALLS.length;
+  await $('#demoBtn').onclick();
+  const pasteCalls = __CALLS.slice(beforeDemo)
+    .filter(c => c.url.indexOf('/api/paste') >= 0 && c.method === 'POST');
+  ok(pasteCalls.length === 1,
+     '点「载入示例数据」走一次粘贴导入（实际 ' + pasteCalls.length + ' 次）');
+  const pasteBody = pasteCalls[0] ? String(pasteCalls[0].body || '') : '';
+  ok(pasteBody.indexOf('| 月份 | 区域 | 产品线 |') >= 0,
+     '示例数据带表头行，后端能自动识别列名');
+  ok(pasteBody.indexOf('| 2026-01 | 华东 | 车险 |') >= 0 &&
+     pasteBody.indexOf('| 2026-06 |') >= 0,
+     '示例数据是完整的 1~6 月（不是只塞了第一行做样子）');
+  // pasteBody 是 JSON.stringify 出来的文本，里面的换行是「反斜杠 + n」两个字符，
+  // 所以这里按 '\\n'（同样是两个字符）切，而不是真的换行符。
+  ok(pasteBody.split('\\n').filter(l => l.indexOf('| 2026-') === 0).length === 36,
+     '示例数据 36 行，够画多系列图');
+  ok(!!(STORE['demo'] && STORE['demo'].total_rows === 36), '载入后进入左侧数据集列表');
+  ok($('#files').textContent.indexOf('示例数据 · 保费月报') >= 0,
+     '文件列表里显示这份数据的名字');
+
   return true;
 })();
