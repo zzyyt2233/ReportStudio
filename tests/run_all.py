@@ -58,6 +58,10 @@ SUITES: list[tuple[str, list[str] | None, bool]] = [
     # 顶层 import 的第三方包必须写进 requirements.txt。纯静态检查，
     # 秒级完成，但挡住的是「照文档装完依赖服务仍起不来」这类问题。
     ("check_deps", ["tools/check_declared_deps.py"], False),
+    # 分发包的排除规则：db_connections.json 有数据库密码、config.local.yaml
+    # 有 API key、outputs/ 是真实业务数据，都不该被打进包发出去。纯路径
+    # 判断、造临时目录即跑即删，秒级。此前这条安全承诺没任何测试守着。
+    ("make_dist", ["tests/make_dist.py"], False),
     ("frontend_logic", None, False),        # node + jsdom
     # 不标 slow：它们只建表不删文件，而且恰恰是最该常跑的几环 ——
     # 「重活跑着的时候服务还通不通」「SESSION 遍历有没有竞态」
