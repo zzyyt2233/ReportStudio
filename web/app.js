@@ -963,11 +963,19 @@ function switchTab(v) {
     b.setAttribute('aria-selected', on ? 'true' : 'false');  // 读屏需要，光有样式不算选中态
   });
   $('#actsReport').hidden = v !== 'report';
-  $('#actsDash').hidden = v === 'report';
+  $('#actsDash').hidden = v !== 'dash';
+  $('#convArea').hidden = v !== 'convert';
+  $('#frame').hidden = v === 'convert';
+  if (v === 'convert') $('#frameEmpty').hidden = true;
+  $('#frameZoom').hidden = v === 'convert';
 }
 
 async function setView(v) {
   switchTab(v);
+  if (v === 'convert') {
+    $('#outInfo').textContent = '上传 Word / PDF，选目标格式即可互转';
+    return;
+  }
   if (v === 'report') {
     setFrame(lastOut ? lastOut.report_url : '');
     if (lastOut) $('#outInfo').textContent = `报告 · 输出目录 ${lastOut.dir}`;
@@ -1024,6 +1032,69 @@ async function renderDash(toFrame) {
 
 $('#tabReport').onclick = () => setView('report');
 $('#tabDash').onclick = () => setView('dash');
+$('#tabConvert').onclick = () => setView('convert');
+
+// ---- 格式转换分区 ----
+let convFile = null;
+$('#convDrop').addEventListener('click', () => $('#convFile').click());
+$('#convDrop').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('#convFile').click(); }
+});
+$('#convFile').addEventListener('change', (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  if (!/\.(docx|pdf)$/i.test(f.name)) { $('#convMsg').textContent = '只支持 .docx / .pdf 文件'; return; }
+  convFile = f;
+  $('#convDrop').textContent = f.name;
+  $('#convDrop').classList.add('has');
+  $('#convBtn').disabled = false;
+  $('#convMsg').textContent = '';
+  const target = /\.pdf$/i.test(f.name) ? 'docx' : 'pdf';
+  document.querySelector(`input[name=convTo][value="${target}"]`).checked = true;
+});
+['dragover', 'dragenter'].forEach(ev => $('#convDrop').addEventListener(ev, e => { e.preventDefault(); $('#convDrop').classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => $('#convDrop').addEventListener(ev, e => { e.preventDefault(); $('#convDrop').classList.remove('over'); }));
+$('#convDrop').addEventListener('drop', (e) => {
+  const f = e.dataTransfer.files[0];
+  if (f && /\.(docx|pdf)$/i.test(f.name)) {
+    convFile = f; $('#convDrop').textContent = f.name;
+    $('#convDrop').classList.add('has'); $('#convBtn').disabled = false;
+    const target = /\.pdf$/i.test(f.name) ? 'docx' : 'pdf';
+    document.querySelector(`input[name=convTo][value="${target}"]`).checked = true;
+  }
+});
+$('#convBtn').addEventListener('click', async () => {
+  if (!convFile) return;
+  const to = document.querySelector('input[name=convTo]:checked').value;
+  const srcExt = /\.pdf$/i.test(convFile.name) ? 'pdf' : 'docx';
+  if (srcExt === to) { $('#convMsg').textContent = '源格式与目标相同，无需转换'; return; }
+  $('#convBtn').disabled = true;
+  $('#convMsg').textContent = '转换中…';
+  const fd = new FormData();
+  fd.append('file', convFile);
+  fd.append('to', to);
+  try {
+    const r = await fetch('/api/convert', { method: 'POST', body: fd });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      $('#convMsg').textContent = (j.detail || '转换失败') + '';
+      $('#convBtn').disabled = false;
+      return;
+    }
+    const blob = await r.blob();
+    const cd = r.headers.get('content-disposition') || '';
+    const m = /filename\*?=(?:UTF-8'')?["']?([^"';]+)/i.exec(cd);
+    const name = m ? decodeURIComponent(m[1]) : ('converted.' + to);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name; a.click();
+    $('#convResult').innerHTML = `<div class="fileitem">已转换：<b>${name}</b> · <a href="${url}" download="${name}">下载</a></div>`;
+    $('#convMsg').textContent = '完成，已自动下载';
+  } catch (err) {
+    $('#convMsg').textContent = '错误：' + err;
+  }
+  $('#convBtn').disabled = false;
+});
 $('#dashRefresh').onclick = () => renderDash(true);
 $('#dashOpenNew').onclick = () => lastDashUrl && window.open(lastDashUrl, '_blank');
 

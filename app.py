@@ -26,7 +26,7 @@ _ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -48,6 +48,10 @@ from core.render.html_report import render_report as render_html
 from core.render.markdown import render_markdown
 from core.render.pdf_report import render_pdf
 from core.render.static_chart import render_chart
+from core.convert import convert_docx_to_pdf, convert_pdf_to_docx
+from docx import Document
+from reportlab.platypus import SimpleDocTemplate
+import pdfplumber
 from core.session_store import clear as session_clear
 from core.session_store import remove as session_remove
 from core.spec import parse as parse_spec
@@ -1395,6 +1399,40 @@ def export(payload: dict):
 
     rel = os.path.relpath(p, ROOT).replace("\\", "/")
     return {"ok": True, "url": f"/{rel}", "path": p}
+
+
+@app.post("/api/convert")
+def convert(file: UploadFile = File(...), to: str = Form(...)):
+    """Word <-> PDF 互转。同步 def：python-docx / pdfplumber / reportlab 都是纯 CPU。"""
+    if Document is None or SimpleDocTemplate is None or pdfplumber is None:
+        raise HTTPException(500, "转换依赖未安装（python-docx / reportlab / pdfplumber）")
+    name = file.filename or "file"
+    ext = os.path.splitext(name)[1].lower().lstrip(".")
+    if ext not in ("docx", "pdf") or to not in ("docx", "pdf") or ext == to:
+        raise HTTPException(400, f"暂只支持 docx 与 pdf 互转（收到：{ext or '无扩展名'} → {to}）")
+    sub = os.path.join(TEMP_DIR, uuid.uuid4().hex[:8])
+    os.makedirs(sub, exist_ok=True)
+    src_path = os.path.join(sub, _safe(name) or ("file." + ext))
+    try:
+        with open(src_path, "wb") as fp:
+            while True:
+                chunk = file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                fp.write(chunk)
+        out_path = os.path.join(sub, "converted." + to)
+        if ext == "docx" and to == "pdf":
+            convert_docx_to_pdf(src_path, out_path)
+        else:
+            convert_pdf_to_docx(src_path, out_path)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"转换失败：{type(e).__name__}: {e}")
+    out_name = os.path.splitext(name)[0] + "." + to
+    mt = "application/pdf" if to == "pdf" else \
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    return FileResponse(out_path, filename=out_name, media_type=mt)
 
 
 def cleanup_temp(max_age_hours: int = 24, limit: int = 15) -> int:

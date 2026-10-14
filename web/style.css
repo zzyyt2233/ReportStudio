@@ -81,6 +81,13 @@ body{margin:0;background:var(--bg);color:var(--ink);
 .drop{border:1.5px dashed var(--line);border-radius:8px;padding:18px 12px;text-align:center;
   cursor:pointer;transition:.15s;background:var(--soft)}
 .drop:hover,.drop.over{border-color:var(--accent);background:var(--accent-soft)}
+.drop.has{border-style:solid;border-color:var(--accent);color:var(--accent);font-weight:600}
+.conv-area{padding:8px 0}
+.conv-head{font-size:13px;font-weight:600;color:var(--ink);margin-bottom:10px}
+.conv-opts{margin:12px 0}
+.conv-opts label{display:inline-flex;align-items:center;gap:5px;margin-right:18px;
+  font-size:13px;color:var(--ink2);cursor:pointer}
+.conv-tip{margin-top:12px;font-size:12px;line-height:1.6}
 .drop-title{font-size:14px}
 .drop-sub{font-size:12px;color:var(--ink3)}
 .paste-box{margin-top:10px}

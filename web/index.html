@@ -232,6 +232,8 @@
               aria-selected="true" aria-controls="frame">报告</button>
       <button class="vtab" id="tabDash" data-view="dash" role="tab"
               aria-selected="false" aria-controls="frame">看板</button>
+      <button class="vtab" id="tabConvert" data-view="convert" role="tab"
+              aria-selected="false" aria-controls="convArea">格式转换</button>
     </div>
     <span id="outInfo" class="hint">生成后在这里预览</span>
     <span style="flex:1"></span>
@@ -252,6 +254,21 @@
   <div id="frameEmpty" class="frame-empty">还没有内容 —— 配好图表后点「生成报告」，或者切到「看板」页签。<br>
     生成好的报告是自包含的单个 HTML 文件，发给别人双击就能看。</div>
   <iframe id="frame" class="is-empty" src="about:blank" title="报告 / 看板预览"></iframe>
+  <div id="convArea" class="conv-area" hidden>
+    <div class="conv-head">文档格式互转</div>
+    <div id="convDrop" class="drop" role="button" tabindex="0">拖入或点击选择 Word / PDF 文件（本机转换，文件不出电脑）</div>
+    <input id="convFile" type="file" accept=".docx,.pdf" hidden>
+    <div class="row conv-opts">
+      <label><input type="radio" name="convTo" value="pdf" checked> 转成 PDF</label>
+      <label><input type="radio" name="convTo" value="docx"> 转成 Word</label>
+    </div>
+    <div class="row">
+      <button id="convBtn" class="btn primary" disabled>开始转换</button>
+      <span id="convMsg" class="msg" aria-live="polite"></span>
+    </div>
+    <div id="convResult" class="filelist"></div>
+    <div class="hint conv-tip">Word→PDF 保留文字 / 表格 / 图片；PDF→Word 仅支持有文字层的 PDF（扫描件需 OCR，暂不支持），多栏 PDF 可能串行。</div>
+  </div>
 </section>
 
 <section class="panel preview">
