@@ -22,6 +22,7 @@ from dataclasses import asdict, dataclass, field
 from . import config as cfgmod
 from .analyze import compute_metrics, numeric_columns
 from .chartset import build_blocks
+from .topic import build_topic_chart
 from .merge import group_datasets, merge_group
 from .model import ChartSpec, Dataset
 from .render.dashboard import build_dashboard_html, norm_span
@@ -274,6 +275,12 @@ def render(datasets: list[Dataset], cfg: DashboardConfig, vendor_path: str,
         block["height"] = src.get("height") or 320
 
     chart_blocks, _ = build_blocks(datasets, specs, decorate=_deco)
+    # 文本类数据自动补「主题分布」图：聚类打标 → 各主题条数柱状图
+    for ds in datasets:
+        res = build_topic_chart(ds)
+        if res:
+            tb, _ = build_blocks([res[0]], [res[1]], decorate=_deco)
+            chart_blocks += tb
 
     # 用户拖出来的自由尺寸优先级最高：它记的是渲染后图块（block_id），
     # 比「来源配置」更贴近用户真正看到的那张图，所以最后覆盖一次。

@@ -1,13 +1,15 @@
 :root{
-  --bg:#F5F5F2; --card:#FFFFFF; --ink:#2C2C2A; --ink2:#5F5E5A; --ink3:#67665F;
+  --bg:#F3F4F6; --card:#FFFFFF; --ink:#2C2C2A; --ink2:#5F5E5A; --ink3:#67665F;
   --line:#E3E1D9; --accent:#185FA5; --accent-soft:#E6F1FB; --warn:#FAEEDA;
   --warn-line:#FAC775; --ok:#E1F5EE; --ok-line:#9FE1CB;
   /* 次级底色：拖放区、列表项、图表卡这类「卡中之卡」统一用它，
      不再各写各的灰；配合无边框化，界面里的线条数量直接减半 */
-  --soft:#F7F6F2;
-  /* 面板阴影刻意调到几乎不可见：只负责把卡片从背景上「托」起来，
-     不制造悬浮感 —— 阴影一重，密集排布的面板就会互相打架 */
-  --shadow:0 1px 2px rgba(44,44,42,.04),0 2px 10px rgba(44,44,42,.03);
+  --soft:#F7F8FA;
+  /* 面板阴影从双层降到单层：只负责把卡片从背景上「托」起来，不制造悬浮感。
+     阴影一重，密集排布的面板就会互相打架 —— 这页一屏就有 9 个面板。 */
+  --shadow:0 1px 2px rgba(44,44,42,.05);
+  /* 功能区强调色：采集蓝 / 分析青绿 / 输出紫，用在面板序号底块上分区 */
+  --c-collect:#185FA5; --c-analyze:#0E8C7A; --c-output:#6D4FC0;
 }
 /* --ink3 从 #888780 加深到 #67665F：旧值在白底上只有约 3.4:1，
    大量 11~12px 的说明文字用它，WCAG 2.2 AA（1.4.3）要求正文 4.5:1。
@@ -30,16 +32,23 @@
 [hidden]{display:none !important}
 body{margin:0;background:var(--bg);color:var(--ink);
   font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;font-size:14px;line-height:1.6}
-.top{display:flex;align-items:baseline;gap:14px;padding:16px 24px;background:var(--card);
-  border-bottom:1px solid var(--line)}
-.brand{font-size:17px;font-weight:600;margin:0}
+/* 顶栏品牌色带：原来白底+一条线，整页灰白一片显单调。
+   深蓝带+白字是后台工具最常见的专业做法，一眼就能看出换肤了。 */
+.top{display:flex;align-items:center;gap:14px;padding:13px 24px;background:var(--accent);
+  border-bottom:none;color:#fff}
+.brand{font-size:17px;font-weight:700;margin:0;color:#fff;letter-spacing:.3px}
 /* h1 默认的上边距会把 header 撑高一截，压掉 */
-.sub{color:var(--ink2);font-size:12px}
+.sub{color:rgba(255,255,255,.82);font-size:12px}
 /* 三列各自独立堆叠：每列一个 .col 容器，列内 panel 依次排列。
    不让 6 个 panel 直接当 grid item —— 那样同行会被拉齐到同一高度，
    折叠起来只有几十像素高的面板（如第 2 节）会被硬撑出一大块空白。 */
 .grid{display:grid;grid-template-columns:300px minmax(0,1fr) 384px;
   gap:16px;padding:16px 24px;align-items:start}
+/* 三列面板整块上淡彩底 + 顶部色条：采集蓝 / 分析青绿 / 输出紫，
+   与序号底块同色系，分区一眼可辨；底色饱和度约 4%，不抢内容 */
+.grid .col:nth-child(1) .panel{background:#F7FAFE;border-top:3px solid var(--c-collect)}
+.grid .col:nth-child(2) .panel{background:#F6FBF9;border-top:3px solid var(--c-analyze)}
+.grid .col:nth-child(3) .panel{background:#FAF8FE;border-top:3px solid var(--c-output)}
 .col{display:flex;flex-direction:column;gap:16px;min-width:0}
 /* 窄屏：列容器不生成盒子，panel 回到按 DOM 顺序单列排列。
    列宽用 minmax(0,1fr) —— 纯 1fr 的最小尺寸等于内容宽度，
@@ -49,10 +58,26 @@ body{margin:0;background:var(--bg);color:var(--ink);
   .col{display:contents}
 }
 .panel{background:var(--card);border:1px solid var(--line);border-radius:12px;
-  padding:16px;box-shadow:var(--shadow)}
-.panel h2{margin:0 0 12px;font-size:14px;font-weight:600;color:var(--ink)}
-.panel h2::before{content:"";display:inline-block;width:3px;height:13px;background:var(--accent);
-  margin-right:8px;vertical-align:-1px;border-radius:2px}
+  padding:14px;box-shadow:var(--shadow)}
+.panel h2{margin:0 0 11px;font-size:14px;font-weight:600;color:var(--ink);
+  display:flex;align-items:center;gap:8px}
+/* 序号底块：原来是一根 3px 竖条，在密集排布里几乎看不出是什么。
+   换成 18px 圆角方块承载序号（序号由 HTML 用 <i class="st"> 提供），
+   视觉锚点明确，读者一眼能数出当前在第几步。没给 .st 的标题保持原样。 */
+.panel h2 .st{display:inline-flex;align-items:center;justify-content:center;
+  width:18px;height:18px;border-radius:5px;background:var(--accent-soft);
+  color:var(--accent);font-size:11px;font-weight:600;font-style:normal;
+  flex:none;line-height:1}
+/* 竖条保留给没有序号的标题（如「历史报告」），避免这类标题头部空一截。
+   用显式的 .plain 类来标记，而不是 :has() —— :has() 在旧版Edge 上不生效，
+   那会让「历史报告」这类标题既没有序号底块、也没有竖条，头部直接空掉。 */
+.panel h2.plain::before{content:"";display:inline-block;width:3px;height:13px;
+  background:var(--accent);margin-right:2px;vertical-align:-1px;border-radius:2px}
+/* 功能分区用不同强调色：采集蓝 / 分析青绿 / 输出紫，
+   让读者一眼区分当前在第几类功能区，而不只是看编号 */
+.grid .col:nth-child(1) .panel h2 .st{background:rgba(24,95,165,.12);color:var(--c-collect)}
+.grid .col:nth-child(2) .panel h2 .st{background:rgba(14,140,122,.14);color:var(--c-analyze)}
+.grid .col:nth-child(3) .panel h2 .st{background:rgba(109,79,192,.15);color:var(--c-output)}
 .drop{border:1.5px dashed var(--line);border-radius:8px;padding:18px 12px;text-align:center;
   cursor:pointer;transition:.15s;background:var(--soft)}
 .drop:hover,.drop.over{border-color:var(--accent);background:var(--accent-soft)}
@@ -80,7 +105,7 @@ input.num{width:72px}
 .fitem .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex:none}
 .fitem .dot.err{background:#E24B4A}
 .fitem .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
-.row{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.row{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
 .row label{font-size:12px;color:var(--ink2);flex:none;min-width:52px}
 .hint{font-size:12px;color:var(--ink3)}
 /* flex 行里的说明文字不给 flex:none 的话，列宽一紧就会被压到一个字宽，
@@ -95,12 +120,23 @@ input.num{width:72px}
 /* 提示色块不再描边：底色+深字已经够了，少一圈线条界面就少一分噪音 */
 .warns div{background:var(--warn);color:#633806;
   font-size:12px;padding:7px 10px;border-radius:8px;margin-bottom:5px}
-.tablewrap{max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:8px}
+.tablewrap{max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:8px}
 table{border-collapse:collapse;width:100%;font-size:12px}
 th,td{border-bottom:1px solid var(--line);padding:6px 9px;text-align:left;white-space:nowrap}
 th{background:#F6F5F1;position:sticky;top:0;font-weight:500;color:var(--ink2)}
-.chart-card{border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:10px;
-  background:var(--soft)}
+/* 图表卡改双列网格 —— 纵向压缩收益最大的一处。
+   每张卡内部有 7 行控件（类型/横轴/数值/多指标/聚合/前N/看板宽度），
+   单列排三张要 780px；并排后只占两行 ≈ 420px，省约 360px。
+   minmax 下限 260px 是因为卡内「多指标」那行有 min-width:150px 的下拉，
+   窄于此它会被挤到换行。auto-fill 让宽屏能排三列。 */
+#charts{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));
+  gap:10px;align-items:start}
+.chart-card{border:1px solid var(--line);border-radius:8px;padding:11px;
+  background:var(--soft);transition:border-color .15s}
+/* 只给可交互的图表卡描边反馈，不给信息面板加抬升动效 ——
+   一屏九张卡时整片都在动反而干扰读数。 */
+.chart-card:hover{border-color:var(--line)}
+.chart-card:focus-within{border-color:var(--accent)}
 .chart-card .hd{display:flex;justify-content:space-between;align-items:center;
   margin-bottom:8px;font-size:12px;color:var(--ink2)}
 /* 图表卡右上角的 × 从 span 换成了 button（键盘可达），还原成原来的小叉外观 */
@@ -140,9 +176,12 @@ th{background:#F6F5F1;position:sticky;top:0;font-weight:500;color:var(--ink2)}
   word-break:break-all}
 .modal .m-acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
 .modal .m-acts .btn{margin:0}
-.preview{margin:0 24px 24px}
-.preview iframe{width:100%;height:640px;border:1px solid var(--line);border-radius:8px;
-  background:#fff;margin-top:10px}
+.preview{margin:0 24px 20px}
+/* iframe 高度跟随视口，不再写死 640px。
+   640px 在 1080p 屏上占掉 59% 视口，推到页面最底部时预览反而看不见；
+   改成 min(56vh, 620px) 后：矮屏不会超出屏幕，高屏仍然给足内容空间。 */
+.preview iframe{width:100%;height:min(56vh,620px);min-height:340px;
+  border:1px solid var(--line);border-radius:8px;background:#fff;margin-top:10px}
 /* 没有内容时不摆一个空框，换成一句说明 */
 .preview iframe.is-empty{display:none}
 /* 放大预览：预览框只有 640px 高，看板里「放大某一张图」的那个面板
@@ -156,12 +195,12 @@ th{background:#F6F5F1;position:sticky;top:0;font-weight:500;color:var(--ink2)}
   width:calc(100vw - 28px);height:calc(100vh - 28px);
   margin:0;border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,.3)}
 .frame-empty{border:1px dashed var(--line);border-radius:8px;background:var(--soft);
-  padding:56px 16px;text-align:center;color:var(--ink3);font-size:13px;
+  padding:36px 16px;text-align:center;color:var(--ink3);font-size:13px;
   line-height:1.9;margin-top:10px}
 
 /* —— 后续新增：文件夹导入、合并建议、导出按钮组 —— */
 .flag{margin-left:auto;font-size:12px;padding:4px 10px;border-radius:999px;
- background:var(--soft);color:#5F5E5A;white-space:nowrap}
+ background:rgba(255,255,255,.16);color:#fff;white-space:nowrap}
 .flag.on{background:#E1F5EE;color:#0F6E56}
 .flag.off{background:#FAEEDA;color:#854F0B}
 .btns-row{display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap}
@@ -189,7 +228,9 @@ th{background:#F6F5F1;position:sticky;top:0;font-weight:500;color:var(--ink2)}
    原来名称、时间、4 个文件链接、按钮全挤在一行，报告攒多了根本认不出谁是谁。
    限高 + 内部滚动：默认列 50 份，全展开时整页能被撑到 5600px 以上，
    底下几节（看板、目录说明）得一直滚才能看见。 */
-.histlist{margin-top:8px;max-height:420px;overflow-y:auto}
+/* 限高从 420 收到 260：默认列 50 份，全展开时整页能被撑到 5600px 以上，
+   底下几节得一直滚才能看见。这个列表是「最近产出」的入口，不需要一屏铺开。 */
+.histlist{margin-top:8px;max-height:260px;overflow-y:auto}
 .hitem{display:flex;flex-direction:column;gap:5px;
  padding:8px 0;border-bottom:1px solid var(--line,#E5E3DC)}
 .hitem:last-child{border-bottom:none}

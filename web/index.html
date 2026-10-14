@@ -10,7 +10,7 @@
 
 <header class="top">
   <h1 class="brand">ReportStudio</h1>
-  <div class="sub" id="subHint">图片 / PDF / Excel / 文本 → 图表 + 结论报告</div>
+  <div class="sub">多源数据报告生成器</div>
   <div id="llmFlag" class="flag">检查中…</div>
 </header>
 
@@ -19,7 +19,7 @@
   <div class="col">
 
     <section class="panel">
-      <h2>1 · 导入数据</h2>
+      <h2><i class="st">1</i>导入数据</h2>
       <div id="drop" class="drop" role="button" tabindex="0"
            aria-label="上传数据文件：拖文件到这里，或按回车打开文件选择框">
         <div class="drop-inner">
@@ -30,17 +30,13 @@
       </div>
       <div class="btns-row">
         <button id="folderBtn" class="btn ghost sm">指定文件夹批量导入</button>
-        <span id="folderHint" class="hint">会把目录里所有支持的文件一次性吃掉</span>
+        <button id="demoBtn" class="btn ghost sm">载入示例数据</button>
       </div>
       <input type="file" id="folder" webkitdirectory directory multiple hidden>
       <div class="paste-box">
         <textarea id="paste" rows="3" aria-label="粘贴表格数据"
           placeholder="也可以直接粘贴一段表格：从 Excel 复制，或从网页复制 Markdown 表格"></textarea>
         <button id="pasteBtn" class="btn ghost sm">粘贴导入</button>
-      </div>
-      <div class="btns-row">
-        <button id="demoBtn" class="btn ghost sm">载入示例数据</button>
-        <span class="hint">第一次用？点一下会塞进一份保费月报，直接就能看图表和报告效果</span>
       </div>
       <div id="files" class="filelist"></div>
       <div class="btns-row">
@@ -50,7 +46,7 @@
     </section>
 
     <section class="panel">
-      <h2>4 · 多文件怎么整合</h2>
+      <h2><i class="st">4</i>多文件怎么整合</h2>
       <div id="mergeHint" class="empty">导入两份以上文件后，这里会给出建议。</div>
       <div id="mergeBox" hidden>
         <div class="row">
@@ -71,7 +67,7 @@
   <div class="col">
 
     <section class="panel">
-      <h2>2 · 从数据库取数（SQL · 只读）</h2>
+      <h2><i class="st">2</i>从数据库取数（SQL · 只读）</h2>
       <details id="dbDetails">
         <summary class="db-sum">连 SQLite / MySQL / PostgreSQL / SQL Server / Oracle，用 SQL 查出来的数据直接当数据表用</summary>
 
@@ -127,7 +123,7 @@
     </section>
 
     <section class="panel">
-      <h2>5 · 告诉我你要什么</h2>
+      <h2><i class="st">5</i>告诉我你要什么</h2>
       <div class="row">
         <label for="rTitle">报告标题</label>
         <input id="rTitle" class="txt" value="数据分析报告">
@@ -179,7 +175,7 @@
   <div class="col">
 
     <section class="panel">
-      <h2>3 · 数据预览与修正</h2>
+      <h2><i class="st">3</i>数据预览与修正</h2>
       <div id="empty" class="empty">还没有数据。先导入文件或粘贴一段表格。</div>
       <div id="preview" hidden>
         <div class="row">
@@ -209,7 +205,7 @@
     </section>
 
     <section class="panel">
-      <h2>6 · 数据看板（一屏概览）</h2>
+      <h2><i class="st">6</i>数据看板（一屏概览）</h2>
       <div class="db-note">看板把上面配好的图 + 指标列排成一屏网格，适合挂屏幕或汇报截图。
         <b>存下来的不是数字，而是「怎么算」</b> —— 之后每次打开都按当前数据重算，看板永远是新的。
         每张图的「宽度」在上面图表卡里选。</div>
@@ -259,7 +255,7 @@
 </section>
 
 <section class="panel preview">
-  <h2>历史报告</h2>
+  <h2 class="plain">历史报告</h2>
   <div class="row">
     <input id="histQ" class="txt" type="search" aria-label="搜索报告名" placeholder="搜索报告名（输入即筛）">
     <button id="refreshHist" class="btn ghost sm">刷新</button>

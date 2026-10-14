@@ -13,6 +13,11 @@ class Column:
     name: str
     dtype: DType
     unit: str | None = None
+    # 是否「是/否」标记列（985/211/双一流 这类 0/1/2 编码）。
+    # None = 交给 is_flag_column 启发式判断（默认，兼容历史数据）；
+    # False = 强制按真实数值聚合（如主题分布的「条数」计数，不能当标记列数 1 的个数）；
+    # True = 强制按标记列处理。
+    flag: bool | None = None
 
     def to_dict(self):
         return {"name": self.name, "dtype": self.dtype, "unit": self.unit}

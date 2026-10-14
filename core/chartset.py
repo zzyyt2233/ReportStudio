@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from .analyze import aggregate
 from .model import CARTESIAN_TYPES, SOLO_TYPES, ChartSpec, Dataset
+from .quality import assess_quality
 from .render.echarts import build_option
 
 
@@ -95,6 +96,8 @@ def build_blocks(datasets: list[Dataset], charts: list[ChartSpec],
     blocks: list[dict] = []
     pending: list[dict] = []
     for ds in datasets:
+        # 数据质量闸门：进图前先体检，问题写进 ds.warnings（报告/看板渲染层已消费）
+        assess_quality(ds)
         cols = {c.name for c in ds.columns}
         for cs, origin in expand_split(charts):
             if cs.x not in cols or not (set(cs.y) & cols):

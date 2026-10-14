@@ -35,6 +35,7 @@ from core import dashboard as dash
 from core import session_store
 from core.analyze import compute_metrics, numeric_columns, template_summary
 from core.chartset import build_blocks, layout_columns
+from core.topic import build_topic_chart
 from core.ingest import dataset_grids, parse_files, parse_file
 from core.llm import polish_summary
 from core.merge import group_datasets, merge_group
@@ -711,6 +712,13 @@ def generate(payload: dict):
 
     # 图块构造统一走 core/chartset，和看板共用同一套口径（含「多指标拆成多张图」）
     chart_blocks, pending = build_blocks(datasets, charts)
+    # 文本类数据自动补「主题分布」图：聚类打标 → 各主题条数柱状图（走同一套 build_blocks）
+    for ds in datasets:
+        res = build_topic_chart(ds)
+        if res:
+            tb, tp = build_blocks([res[0]], [res[1]])
+            chart_blocks += tb
+            pending += tp
     agg_store = {it["id"]: it for it in pending}
     chart_images: dict[str, str] = {}
 
@@ -1341,8 +1349,8 @@ def export(payload: dict):
     PDF 还要经过一次浏览器内核渲染，实测 1~5 秒。
     """
     kind = payload.get("kind")
-    if kind not in ("docx", "pdf", "png"):
-        raise HTTPException(400, "只支持 docx / pdf / png")
+    if kind not in ("docx", "pdf", "png", "xlsx"):
+        raise HTTPException(400, "只支持 docx / pdf / png / xlsx")
     out_dir = payload.get("dir")
     if not out_dir or not os.path.isdir(out_dir):
         raise HTTPException(404, "报告目录不存在，请重新生成")
@@ -1375,6 +1383,9 @@ def export(payload: dict):
             p = render_docx(sub["datasets"], sub["spec"], sub["chart_blocks"],
                             sub["metric_cards"], sub["summary"], out_dir,
                             chart_images)
+        elif kind == "xlsx":
+            from core.excel_export import save_report_excel
+            p = save_report_excel(sub, out_dir)
         else:
             p = render_pdf(sub["datasets"], sub["spec"], sub["chart_blocks"],
                            sub["metric_cards"], sub["summary"], out_dir,

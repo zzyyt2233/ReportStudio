@@ -8,7 +8,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .anomaly import detect_series_anomalies
+from .trend import analyze_trend
 from .model import ChartSpec, Dataset
+from .quality import profile_dataset
 
 AGG_FUNCS = {
     "sum": lambda vals: sum(vals),
@@ -189,7 +192,11 @@ def aggregate(ds: Dataset, spec: ChartSpec) -> dict:
         all_vals = [r.get(y) for r in rows if isinstance(r.get(y), (int, float))]
         # 标记列（985/211/双一流 填 1/2 那种）求和会把「否」也算进去，
         # 得出「江苏 321 所双一流」这种离谱数字。这里改成数「是」的条数。
-        flag = is_flag_column(all_vals)
+        # 列的 flag 属性显式指定时优先（None 才回退到启发式），
+        # 这样派生出来的「条数」计数列不会被误判成 0/1/2 标记列。
+        col_obj = next((c for c in ds.columns if c.name == y), None)
+        explicit = getattr(col_obj, "flag", None)
+        flag = explicit if explicit is not None else is_flag_column(all_vals)
         data = []
         for cat in categories:
             vals = [r.get(y) for r in buckets[cat] if isinstance(r.get(y), (int, float))]
@@ -261,6 +268,11 @@ def aggregate(ds: Dataset, spec: ChartSpec) -> dict:
         categories = categories[: spec.limit]
         series = [{"name": s["name"], "data": s["data"][: spec.limit]} for s in series]
 
+    # ---- 统计异常检测：在排序/截断之后算，索引才和最终 categories 对齐 ----
+    # 每个 series 挂上自己的异常明细，图表（红点 + 标注）和结论（汇总句）共用同一份。
+    for s in series:
+        s["anomalies"] = detect_series_anomalies(categories, s["data"])
+
     return {"categories": categories, "series": series, "unit": unit,
             "units": units,
             "skipped_empty_category": skipped_empty_cat, "x": x,
@@ -313,7 +325,9 @@ def compute_metrics(ds: Dataset, cols: list[str],
         total = sum(vals)
         mean = total / len(vals)
         is_pct = units.get(col) == "%"
-        is_flag = is_flag_column(vals)
+        col_obj = next((c for c in ds.columns if c.name == col), None)
+        explicit = getattr(col_obj, "flag", None)
+        is_flag = explicit if explicit is not None else is_flag_column(vals)
 
         if is_flag:
             ones = sum(1 for v in vals if v == 1)
@@ -375,6 +389,13 @@ def template_summary(ds: Dataset, chart_specs: list[ChartSpec],
                  if any(getattr(s, "exclude_summary", True) for s in chart_specs)
                  or not chart_specs else ds.rows)
     lines = [f"数据共 {len(used_rows)} 行（总计 {len(ds.rows)} 行），来源于「{ds.name}」。"]
+    # 数据健康度前置：问题明细已写进报告末尾「数据质量提示」，这里先给一句总评
+    _prof = profile_dataset(ds)
+    if _prof["issues"]:
+        lines.append(
+            f"数据健康度 {_prof['health']}/100，发现 {len(_prof['issues'])} 项需关注"
+            f"（详见报告末尾「数据质量提示」）。"
+        )
     seen: set[str] = set()
     pct_cols = {c["title"] for c in metrics if c.get("_raw", {}).get("percent")}
     excl = bool(chart_specs) and all(getattr(s, "exclude_summary", True)
@@ -447,4 +468,26 @@ def template_summary(ds: Dataset, chart_specs: list[ChartSpec],
             f"按「{spec.x}」看{s['name']}：{top[0]}最高（{_fmt(top[1])}{share}），"
             f"{bottom[0]}最低（{_fmt(bottom[1])}）。"
         )
+        # 异常汇总：把这张图里所有 series 检出的异常揉成一句，避免每张图各写一遍。
+        anom_series = [s2 for s2 in agg["series"] if s2.get("anomalies")]
+        if anom_series:
+            segs = []
+            for s2 in anom_series:
+                alist = s2["anomalies"]
+                cats = "、".join(str(a["category"]) for a in alist[:6])
+                segs.append(f"「{s2['name']}」{len(alist)} 处（{cats}）")
+            add("检测到数值异常：" + "；".join(segs) + "，已在图中以红色标出。")
+
+        # 趋势叙事：横轴像时间序时才给涨最快/跌最快区间与拐点，避免对按值排序的柱子误报
+        t = analyze_trend(agg["categories"], s["data"])
+        if t:
+            if t.get("fastest_rise"):
+                fr = t["fastest_rise"]
+                add(f"「{s['name']}」环比增长最快出现在 {fr['from']}→{fr['to']}（{fr['rate']:+.1%}）。")
+            if t.get("fastest_drop"):
+                fd = t["fastest_drop"]
+                add(f"「{s['name']}」降幅最大为 {fd['from']}→{fd['to']}（{fd['rate']:+.1%}）。")
+            if t.get("turning"):
+                pts = "、".join(t["turning"][:4])
+                add(f"「{s['name']}」在 {pts} 出现趋势拐点。")
     return "".join(lines)

@@ -81,9 +81,15 @@ def build_option(agg: dict, spec: ChartSpec) -> dict:
         # 单位取这个系列自己的，不是全图第一个指标的。
         su = _unit_of(agg, agg["series"][0]["name"]) if agg["series"] else unit
         scale = (lambda v: round(v * 100, 4)) if su == "%" else (lambda v: v)
-        data = [{"name": n, "value": scale(v)}
-                for n, v in zip(agg["categories"], agg["series"][0]["data"])] \
-            if agg["series"] else []
+        anom_idx = ({a["index"]: a for a in (agg["series"][0].get("anomalies") or [])}
+                    ) if agg["series"] else {}
+        data = []
+        if agg["series"]:
+            for i, (n, v) in enumerate(zip(agg["categories"], agg["series"][0]["data"])):
+                item = {"name": n, "value": scale(v)}
+                if i in anom_idx:
+                    item["itemStyle"] = {"color": "#E24B4A"}
+                data.append(item)
         opt["tooltip"] = {"trigger": "item", "formatter": "{b}: {c} ({d}%)"}
         opt["legend"] = {"top": 8, "type": "scroll", "textStyle": {"color": "#444441"}}
         opt["series"] = [{
@@ -139,7 +145,16 @@ def build_option(agg: dict, spec: ChartSpec) -> dict:
         # 按**这个系列自己的**单位判断：一张图里同时有销售额和毛利率时，
         # 销售额不该被乘 100，毛利率也不该按原样画成 0.15。
         su = _unit_of(agg, s["name"], unit)
-        data = [round(v * 100, 4) for v in s["data"]] if su == "%" else s["data"]
+        scale = (lambda v: round(v * 100, 4)) if su == "%" else (lambda v: v)
+        # 异常点：原值检测、展示值标红。索引在 aggregate 里已对齐最终 categories。
+        anom_idx = {a["index"]: a for a in (s.get("anomalies") or [])}
+        data = []
+        for di, v in enumerate(s["data"]):
+            disp = scale(v)
+            if di in anom_idx:
+                data.append({"value": disp, "itemStyle": {"color": "#E24B4A"}})
+            else:
+                data.append(disp)
         one: dict = {
             "name": s["name"],
             "type": stype,
@@ -147,6 +162,15 @@ def build_option(agg: dict, spec: ChartSpec) -> dict:
             "yAxisIndex": yidx,
             "emphasis": {"focus": "series"},
         }
+        if anom_idx:
+            # 红色「异」标注钉在异常点上方，和柱体/折线的红点呼应
+            one["markPoint"] = {
+                "symbol": "pin", "symbolSize": 34,
+                "itemStyle": {"color": "#E24B4A"},
+                "label": {"color": "#fff", "fontSize": 10},
+                "data": [{"coord": [agg["categories"][ai], scale(s["data"][ai])],
+                          "value": "异"} for ai in anom_idx],
+            }
         if stype == "bar":
             one["barMaxWidth"] = 42
             one["itemStyle"] = {"borderRadius": [3, 3, 0, 0]}
