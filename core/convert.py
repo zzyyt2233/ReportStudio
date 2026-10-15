@@ -14,7 +14,10 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import tempfile
+import threading
 from xml.sax.saxutils import escape as _xml_escape
 
 try:
@@ -78,7 +81,95 @@ def _register_font() -> bool:
 
 # ------------------------------ docx -> pdf ------------------------------
 
-def convert_docx_to_pdf(src: str, out: str) -> None:
+# LibreOffice 单实例串行锁：同一 profile 不能并发跑，多请求同时转 docx 会互相踩。
+_SOFFICE_LOCK = threading.Lock()
+
+
+def _find_soffice():
+    """定位 LibreOffice 的 soffice 可执行文件，找不到返回 None。
+
+    顺序：环境变量 REPORTSTUDIO_SOFFICE（自定义安装 / 测试注入）→ PATH →
+    各盘常见安装路径。返回 None 时调用方自动回退纯 Python 路线。
+    """
+    env = os.environ.get("REPORTSTUDIO_SOFFICE")
+    if env and os.path.exists(env):
+        return env
+    for name in ("soffice", "soffice.exe"):
+        p = shutil.which(name)
+        if p:
+            return p
+    cands = [
+        r"C:\Program Files\LibreOffice\program\soffice.exe",
+        r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+        os.path.expanduser(r"~\AppData\Local\Programs\LibreOffice\program\soffice.exe"),
+        r"D:\Program Files\LibreOffice\program\soffice.exe",
+        r"D:\LibreOffice\program\soffice.exe",
+        r"E:\LibreOffice\program\soffice.exe",
+        "/usr/bin/soffice",
+        "/usr/local/bin/soffice",
+        "/opt/libreoffice/program/soffice",
+        "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+    ]
+    for c in cands:
+        if os.path.exists(c):
+            return c
+    return None
+
+
+def _soffice_to_pdf(src: str, out: str, timeout: int = 180) -> bool:
+    """调 LibreOffice headless 把 docx 转 pdf。
+
+    成功且产物就位返回 True；任何失败（没装、超时、非零退出、没产出）都返回
+    False，由调用方回退纯 Python —— 用户机器上 LibreOffice 装坏了不该让功能挂掉。
+    """
+    soffice = _find_soffice()
+    if not soffice:
+        return False
+    out_dir = os.path.dirname(out)
+    # 独立 profile：避免和用户正在开的 LibreOffice 实例抢同一个 profile 目录
+    profile = os.path.join(tempfile.gettempdir(),
+                           f"rs_lo_{os.getpid()}_{threading.get_ident()}")
+    cmd = [soffice, "--headless", "--norestore", "--nolockcheck",
+           f"-env:UserInstallation={_file_uri(profile)}",
+           "--convert-to", "pdf", "--outdir", out_dir, src]
+    try:
+        with _SOFFICE_LOCK:
+            r = subprocess.run(cmd, capture_output=True, timeout=timeout)
+        if r.returncode != 0:
+            return False
+        # LibreOffice 按源文件名产出：sample.docx -> sample.pdf
+        produced = os.path.join(out_dir,
+                                os.path.splitext(os.path.basename(src))[0] + ".pdf")
+        if not os.path.exists(produced):
+            return False
+        if os.path.abspath(produced) != os.path.abspath(out):
+            shutil.move(produced, out)
+        return os.path.exists(out) and os.path.getsize(out) > 0
+    except Exception:
+        return False
+
+
+def _file_uri(path: str) -> str:
+    from pathlib import Path
+    try:
+        return Path(path).as_uri()
+    except Exception:
+        return path.replace("\\", "/")
+
+
+def convert_docx_to_pdf(src: str, out: str) -> str:
+    """docx 转 pdf。返回实际使用的引擎：'libreoffice' 或 'python'。
+
+    优先 LibreOffice（字体、页眉页脚、表格样式全保留，质量高一个量级）；
+    探测不到或转换失败时自动回退 reportlab 纯 Python 重建。
+    """
+    if _soffice_to_pdf(src, out):
+        return "libreoffice"
+    _reportlab_docx_to_pdf(src, out)
+    return "python"
+
+
+def _reportlab_docx_to_pdf(src: str, out: str) -> None:
     if Document is None or SimpleDocTemplate is None:
         raise RuntimeError("未安装 python-docx / reportlab，无法转换")
     _register_font()

@@ -1085,11 +1085,12 @@ $('#convBtn').addEventListener('click', async () => {
     const cd = r.headers.get('content-disposition') || '';
     const m = /filename\*?=(?:UTF-8'')?["']?([^"';]+)/i.exec(cd);
     const name = m ? decodeURIComponent(m[1]) : ('converted.' + to);
+    const engine = r.headers.get('x-convert-engine') === 'libreoffice' ? 'LibreOffice' : '纯 Python';
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = name; a.click();
-    $('#convResult').innerHTML = `<div class="fileitem">已转换：<b>${name}</b> · <a href="${url}" download="${name}">下载</a></div>`;
-    $('#convMsg').textContent = '完成，已自动下载';
+    $('#convResult').innerHTML = `<div class="fileitem">已转换：<b>${name}</b>（${engine} 引擎） · <a href="${url}" download="${name}">下载</a></div>`;
+    $('#convMsg').textContent = `完成（${engine} 引擎），已自动下载`;
   } catch (err) {
     $('#convMsg').textContent = '错误：' + err;
   }

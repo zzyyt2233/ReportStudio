@@ -1422,9 +1422,10 @@ def convert(file: UploadFile = File(...), to: str = Form(...)):
                 fp.write(chunk)
         out_path = os.path.join(sub, "converted." + to)
         if ext == "docx" and to == "pdf":
-            convert_docx_to_pdf(src_path, out_path)
+            engine = convert_docx_to_pdf(src_path, out_path)
         else:
             convert_pdf_to_docx(src_path, out_path)
+            engine = "python"
     except HTTPException:
         raise
     except Exception as e:
@@ -1432,7 +1433,8 @@ def convert(file: UploadFile = File(...), to: str = Form(...)):
     out_name = os.path.splitext(name)[0] + "." + to
     mt = "application/pdf" if to == "pdf" else \
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    return FileResponse(out_path, filename=out_name, media_type=mt)
+    return FileResponse(out_path, filename=out_name, media_type=mt,
+                        headers={"X-Convert-Engine": engine})
 
 
 def cleanup_temp(max_age_hours: int = 24, limit: int = 15) -> int:
