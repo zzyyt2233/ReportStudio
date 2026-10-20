@@ -1,7 +1,8 @@
 """文本 Dataset → 主题分布图（派生 Dataset + ChartSpec）。
 
 接入 build_blocks 即可出图，无需改任何渲染层：
-- 文本类数据（会议纪要 / 调研报告 / 粘贴文本）按段/行切成片段；
+- 文本类数据（txt / md 落成 source_type="text"，docx 落成 "docx"）按段/行切成片段；
+  粘贴导入的内容是 source_type="paste"，不在下面那道闸门里，暂时不出主题图；
 - 用 tagger 做关键词或 TF-IDF+KMeans 打标；
 - 统计各标签条数，生成一张「主题分布」柱状图，自动追加进报告/看板。
 """
