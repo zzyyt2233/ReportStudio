@@ -1,10 +1,14 @@
 name: CI
 
+# 两条分支都留着。master 是本地一直在推进的主线；远端那条 main 只有 7 个提交，
+# 根提交和 master 不是同一个（早期经 GitHub REST API 同步时另起了一条线），
+# 内容重复、进度还停在「界面重设计」那一步。默认分支切到 master 之后，
+# 触发器要是还只写 main，推再多也不会跑一次。
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   pull_request:
-    branches: [main]
+    branches: [main, master]
   workflow_dispatch:
 
 concurrency:
@@ -15,6 +19,13 @@ jobs:
   regression:
     name: 全量回归（${{ matrix.os }} / ${{ matrix.deps }}）
     runs-on: ${{ matrix.os }}
+    env:
+      # Windows runner 上 python 的 stdout 用的是系统 ANSI 代码页，不是 UTF-8。
+      # 回归里三十多套会往标准输出打中文和 ✓，编码不对就整片死在
+      # UnicodeEncodeError 上 —— 报的是「打不出来」，不是「代码有问题」。
+      # 本地按 cp1252 复现过：35 套里 33 套红，连汇总那行 print 也一起崩；
+      # 同一个检出改成 UTF-8 输出就是 35/35 全绿。
+      PYTHONIOENCODING: "utf-8"
     strategy:
       fail-fast: false
       # 两档的差别只在数据库驱动：
@@ -73,6 +84,15 @@ jobs:
         # windows runner 默认 shell 是 PowerShell，显式 shell: bash 让 npm 走 Git Bash。
         shell: bash
         run: npm install --no-save jsdom
+
+      - name: 生成示例数据
+        # samples/ 入库的只有生成器，八份样例（xlsx / docx / pdf / png / csv / db / md）
+        # 全是跑出来的 —— .gitignore 里那条注释就写着「clone 后跑一次」。
+        # CI 是干净检出，不补这一步，smoke、compat、type_matrix 三套会直接抛
+        # FileNotFoundError: samples\销售明细（带合并标题）.xlsx，
+        # 红的是「文件不存在」，跟回归要验的东西一点关系没有。
+        shell: bash
+        run: python samples/make_samples.py
 
       - name: 全量回归
         shell: bash
