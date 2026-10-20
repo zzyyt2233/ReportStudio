@@ -120,8 +120,12 @@ if os.path.exists(meta_p):
 hr("2 · /api/history 带摘要，且能搜")
 h = client.get("/api/history").json()
 check("items" in h and "total" in h, "返回结构含 items / total")
-mine = [it for it in h.get("items", []) if it.get("dir") == out_dir]
-check(bool(mine), "刚生成的报告出现在列表里")
+# 用 q 定位而不是翻默认列表：默认 limit=50 只回字典序最靠前的 50 份，
+# outputs 里积了几百份历史报告时，刚生成的这份很可能排在 50 名之外 ——
+# 那是分页行为，不是缺陷。按名字搜（服务端过滤全量）才是稳定断言。
+hq0 = client.get("/api/history", params={"q": "hist测试报告"}).json()
+mine = [it for it in hq0.get("items", []) if it.get("dir") == out_dir]
+check(bool(mine), "刚生成的报告能按名字搜到")
 if mine:
     it = mine[0]
     check(it.get("meta", {}).get("charts") == 1, "列表项带 meta（图表数）")
@@ -130,7 +134,7 @@ if mine:
     check(re.fullmatch(r"\d{2}-\d{2} \d{2}:\d{2}", it.get("stamp") or ""),
           f"时间戳解析成「月-日 时:分」：{it.get('stamp')!r}")
 
-q1 = client.get("/api/history", params={"q": "hist测试报告"}).json()
+q1 = hq0
 check(q1.get("filtered") is True, "传了 q 时 filtered=true")
 check(any(x.get("dir") == out_dir for x in q1.get("items", [])), "按名字能搜到这份报告")
 
@@ -164,7 +168,8 @@ if os.path.exists(xpath):
 
 bad = client.post("/api/export_dataset", json={"id": "不存在", "kind": "csv"}).json()
 check(not bad.get("ok"), "导出不存在的表 → ok:false，不是崩")
-bad2 = client.post("/api/export_dataset", json={"id": did, "kind": "pdf"}).json()
+# 格式白名单已扩到 csv / xlsx / docx / pdf，这里用真正不支持的格式验证拦截
+bad2 = client.post("/api/export_dataset", json={"id": did, "kind": "txt"}).json()
 check(not bad2.get("ok"), "不支持的格式被拒")
 
 hr("4 · 删除报告的越权防护")

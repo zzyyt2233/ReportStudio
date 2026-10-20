@@ -106,6 +106,21 @@ def generate(payload: dict) -> dict:
     return r.json() if r.status_code == 200 else {"ok": False, "error": f"HTTP {r.status_code}"}
 
 
+def short_txt_ids() -> list[str]:
+    """三行文本（非空行 3 < core/topic.py 的 _MIN_SEG=4）→ 聚不出主题、表里也没数值列。
+
+    这是 suite 里唯一稳定的「一张图都画不出来」入口，专门用来验降级分支：
+    长篇纯文本现在会自动补「主题分布」图，已经不能再当无图样本来用了。
+    """
+    os.makedirs(os.path.join(ROOT, "temp"), exist_ok=True)
+    txt_path = os.path.join(ROOT, "temp", "matrix_sample.txt")
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write("2025 年第三季度经营摘要\n\n营收同比 +12%，主要来自华东。\n成本上升 4%。\n")
+    with open(txt_path, "rb") as f:
+        r = client.post("/api/upload", files={"files": ("matrix_sample.txt", f.read(), "text/plain")})
+    return [res["dataset"]["id"] for res in r.json().get("results", []) if res.get("ok")]
+
+
 def json_preview(r) -> str:
     try:
         s = str(r.json())
@@ -144,13 +159,7 @@ for fn, label in SINGLE:
 
 hr("A+ · txt 纯文本单独导入（无任何表格）")
 clear()
-os.makedirs(os.path.join(ROOT, "temp"), exist_ok=True)
-txt_path = os.path.join(ROOT, "temp", "matrix_sample.txt")
-with open(txt_path, "w", encoding="utf-8") as f:
-    f.write("2025 年第三季度经营摘要\n\n营收同比 +12%，主要来自华东。\n成本上升 4%。\n")
-with open(txt_path, "rb") as f:
-    r = client.post("/api/upload", files={"files": ("matrix_sample.txt", f.read(), "text/plain")})
-txt_ids = [res["dataset"]["id"] for res in r.json().get("results", []) if res.get("ok")]
+txt_ids = short_txt_ids()
 check(bool(txt_ids), "txt 能导入")
 if txt_ids:
     g = generate({"dataset_ids": txt_ids, "merge_mode": "merge", "title": "txt 单测",
@@ -184,10 +193,25 @@ clear()
 did = upload("会议纪要.md")
 g = generate({"dataset_ids": did, "merge_mode": "merge", "title": "无图片·仅文本",
               "template": "full", "charts": [], "metrics": []})
-check(bool(g.get("ok")), "只有文本时也能出报告（降级，不报错）")
+check(bool(g.get("ok")), "只有文本时也能出报告，不报错")
 if g.get("ok"):
-    check(bool(g.get("degraded")), "明确标记为降级报告")
+    # 会议纪要.md 的正文够 4 段，自动补的「主题分布」图会顶上来，所以不再是降级报告。
+    # 降级分支由 B2b（三行短文本）负责验，两条路都要守着。
+    check(not g.get("degraded") and g.get("charts", 0) >= 1,
+          "长篇纯文本出主题分布图，不再打降级标记")
     check(os.path.exists(os.path.join(g["dir"], "report.html")), "只有文本时 HTML 已落盘")
+
+hr("B2b · 文本短到聚不出主题时，仍必须降级而不是报错")
+clear()
+sids = short_txt_ids()
+check(bool(sids), "短文本能导入")
+if sids:
+    g = generate({"dataset_ids": sids, "merge_mode": "merge", "title": "短文本·降级",
+                  "template": "full", "charts": [], "metrics": []})
+    check(bool(g.get("ok")) and bool(g.get("degraded")), "无图可画时明确标记为降级报告")
+    if g.get("ok"):
+        body = open(os.path.join(g["dir"], "report.html"), encoding="utf-8").read()
+        check("数据摘要报告" in body, "降级说明写进了报告")
 
 hr("B3 · 只有图片、且未接大模型（llm=false）")
 clear()
@@ -289,7 +313,8 @@ if g.get("ok"):
 
 hr("D2 · 「降级报告」也能导出 Word/PDF（无图也不能崩）")
 clear()
-did2 = upload("会议纪要.md")
+# 用短文本而不是 会议纪要.md：长篇文本现在有主题分布图顶着，已经走不到降级分支了
+did2 = short_txt_ids()
 g = generate({"dataset_ids": did2, "merge_mode": "merge", "title": "降级导出",
               "template": "full", "charts": [], "metrics": []})
 check(bool(g.get("ok")) and g.get("degraded"), "降级报告已生成")

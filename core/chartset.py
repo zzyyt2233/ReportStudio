@@ -17,7 +17,8 @@ from __future__ import annotations
 from .analyze import aggregate
 from .model import CARTESIAN_TYPES, SOLO_TYPES, ChartSpec, Dataset
 from .quality import assess_quality
-from .render.echarts import build_option
+from .render import theme as T
+from .render.echarts import build_option_pair
 
 
 def split_groups(c: ChartSpec) -> list[list[str]]:
@@ -85,10 +86,12 @@ def expand_split(charts: list[ChartSpec]) -> list[tuple[ChartSpec, ChartSpec]]:
 
 
 def build_blocks(datasets: list[Dataset], charts: list[ChartSpec],
-                 decorate=None) -> tuple[list[dict], list[dict]]:
+                 decorate=None, theme: str = "light") -> tuple[list[dict], list[dict]]:
     """(数据表 × 图表配置) → 图块列表 + 待出图清单。
 
-    - 图块列表：给 HTML 报告和看板用（含 ECharts option）。
+    - 图块列表：给 HTML 报告和看板用。block["option"] 是按 theme 选定的初版，
+      block["options"] 是 {light, dark} 两套 —— 自包含单文件里的主题切换
+      直接换 setOption，不用再回服务端重渲染。
     - 待出图清单：给 matplotlib 用（Word/PDF/拼长图），带 agg 和 spec。
 
     decorate(block, spec, origin) 可选，让调用方补自己的字段（看板的 span/height）。
@@ -116,10 +119,12 @@ def build_blocks(datasets: list[Dataset], charts: list[ChartSpec],
             flagged = [s["name"] for s in agg.get("series", []) if s.get("flag")]
             if flagged and cs2.agg == "sum":
                 title += f" · {('、').join(flagged)}按「是」的条数计"
+            options = build_option_pair(agg, cs2)
             block = {
                 "id": cid,
                 "title": title,
-                "option": build_option(agg, cs2),
+                "options": options,
+                "option": options[T.norm(theme)],
                 "dataset": ds.id,
                 # 横轴列名带上：看板里「查看这张图的数据」要用它当表格第一列的表头，
                 # 写着「省份」比写着「类目」清楚得多。

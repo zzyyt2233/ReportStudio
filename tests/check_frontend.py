@@ -81,8 +81,16 @@ def main() -> int:
               "name", "id", "url", "path", "items", "files", "y_types"]
     backend = ""
     root = os.path.dirname(WEB)
+    # 路由拆到 core/routes/ 之后，返回字段分散在各路由模块里，
+    # 只搜 app.py 会漏（report_url/md_url 现在在 routes/generate.py）。
     for f in ("app.py", os.path.join("core", "model.py"),
-              os.path.join("core", "merge.py")):
+              os.path.join("core", "merge.py"),
+              os.path.join("core", "routes", "generate.py"),
+              os.path.join("core", "routes", "export.py"),
+              os.path.join("core", "routes", "history.py"),
+              os.path.join("core", "routes", "dashboards.py"),
+              os.path.join("core", "routes", "db.py"),
+              os.path.join("core", "routes", "convert.py")):
         p = os.path.join(root, f)
         if os.path.exists(p):
             backend += open(p, encoding="utf-8").read()

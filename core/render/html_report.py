@@ -1,4 +1,9 @@
-"""生成自包含的 HTML 报告（图表库内联，拷到别的电脑也能双击打开）。"""
+"""生成自包含的 HTML 报告（图表库内联，拷到别的电脑也能双击打开）。
+
+主题：深浅两套色板都写进同一个单文件（core.render.theme 一处定义），
+页头有切换按钮，切换记录在浏览器 localStorage。生成时按工作台传来的
+theme 定初值 —— 工作台是深色，发出来的报告打开就是深色。
+"""
 
 from __future__ import annotations
 
@@ -8,27 +13,38 @@ from datetime import datetime
 
 from ..analyze import detail_rows, detail_sort_label
 from ..model import Dataset, ReportSpec
+from . import theme as T
 
-CSS = """
-:root{--bg:#F7F7F5;--card:#FFFFFF;--ink:#2C2C2A;--ink2:#5F5E5A;--line:#E5E3DC;--accent:#185FA5}
+CSS = T.css_block() + """
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--ink);
- font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;line-height:1.7}
+ font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;line-height:1.7;
+ background-image:radial-gradient(1100px 320px at 88% -120px,rgba(24,95,165,.07),transparent 70%);
+ background-attachment:fixed}
+html[data-theme=dark] body{background-image:radial-gradient(1100px 320px at 88% -120px,rgba(91,161,232,.10),transparent 70%)}
 .wrap{max-width:1080px;margin:0 auto;padding:32px 24px 64px}
-header{border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:24px}
-h1{font-size:24px;font-weight:500;margin:0 0 8px}
+header{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;
+ border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:24px}
+header>div{min-width:0}
+h1{font-size:24px;font-weight:600;margin:0 0 8px;letter-spacing:.2px}
 .meta{color:var(--ink2);font-size:13px}
-h2{font-size:17px;font-weight:500;margin:36px 0 14px;padding-left:10px;border-left:3px solid var(--accent)}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px}
-.summary{background:var(--card);border:1px solid var(--line);border-radius:12px;
- padding:18px 20px;font-size:14px;color:#3A3A38}
+.grow{flex:1}
+h2{font-size:17px;font-weight:600;margin:36px 0 14px;padding-left:10px;border-left:3px solid var(--accent)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;
+ box-shadow:0 1px 2px rgba(15,20,28,.04)}
+.summary{background:var(--card);border:1px solid var(--line);border-radius:14px;
+ padding:18px 20px;font-size:14px;color:var(--ink2)}
 /* 指标卡：数值是主角，口径标签（合计/均值）退成次要信息。
    原来数值和「合计」只隔 4px，渲染出来是「4.11万合计」一整坨，
    读着像连体词；现在三层各留出间距，扫一眼就能分开读。 */
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+.metric{transition:box-shadow .15s,transform .15s}
+.metric:hover{box-shadow:0 6px 20px -12px rgba(15,20,28,.25);transform:translateY(-1px)}
 .metric .t{font-size:13px;color:var(--ink2)}
-.metric .v{font-size:30px;font-weight:600;line-height:1.15;margin:14px 0 0}
-.metric .u{font-size:13px;font-weight:400;color:#8A8880;margin-left:10px}
+.metric .v{font-size:30px;font-weight:650;line-height:1.15;margin:14px 0 0;
+ font-variant-numeric:tabular-nums}
+.metric .u{font-size:13px;font-weight:400;color:var(--ink3);margin-left:10px}
 .metric .d{font-size:12px;color:var(--ink2);border-top:1px solid var(--line);
  margin-top:16px;padding-top:10px;line-height:1.75}
 .chart{height:380px}
@@ -43,26 +59,50 @@ h2{font-size:17px;font-weight:500;margin:36px 0 14px;padding-left:10px;border-le
 @media(max-width:860px){.chartgrid{grid-template-columns:1fr!important}}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;white-space:nowrap}
-th{background:#F1EFE8;color:#444441;font-weight:500;position:sticky;top:0}
+th{background:var(--th);color:var(--ink2);font-weight:500;position:sticky;top:0}
+tbody tr:nth-child(even){background:var(--row_alt)}
 /* 排序标记：明细表按哪一列排的，要能一眼看出来。
    只排了不说，用户会对着「顺序怎么变了」怀疑数据被动过。 */
 th .srt{color:var(--accent);font-weight:700;margin-left:4px}
 th.sorted{color:var(--accent)}
-.scroll{max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:12px}
-.warn{background:#FAEEDA;border:1px solid #FAC775;border-radius:10px;padding:12px 16px;
- font-size:13px;color:#633806;margin-top:10px}
+.scroll{max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:14px}
+.warn{background:var(--warn_bg);border:1px solid var(--warn_line);border-radius:10px;
+ padding:12px 16px;font-size:13px;color:var(--warn_ink);margin-top:10px}
 ul.warn{margin:0;padding-left:20px}
-pre.src{background:var(--card);border:1px solid var(--line);border-radius:12px;
+pre.src{background:var(--card);border:1px solid var(--line);border-radius:14px;
  padding:14px;font-size:12px;color:var(--ink2);overflow:auto;max-height:260px;
  font-family:Consolas,"Courier New",monospace}
 footer{margin-top:40px;color:var(--ink2);font-size:12px;text-align:center}
 .ch.head{display:flex;align-items:center;gap:10px;font-size:14px;font-weight:500;
  margin-bottom:8px}
 .ch.head span{flex:1}
-button.dl{font:inherit;font-size:12px;font-weight:400;padding:3px 10px;cursor:pointer;
- border:1px solid var(--line);background:var(--bg);color:var(--ink2);border-radius:6px}
+button.dl{font:inherit;font-size:12px;font-weight:400;padding:4px 12px;cursor:pointer;
+ border:1px solid var(--line);background:var(--card);color:var(--ink2);border-radius:8px}
 button.dl:hover{border-color:var(--accent);color:var(--accent)}
-@media print{button.dl{display:none}}
+@media print{button.dl{display:none}.wrap{max-width:none;padding:0}
+ body{background:#fff;background-image:none}}
+"""
+
+# 主题切换运行时：报告与看板共用。
+# - 两套 option 都随页下发（OPTS_L / OPTS_D），切换只是换 setOption，不回服务端；
+# - 选择记在 localStorage('reportstudio.out.theme')，单文件拷出去下次打开还认。
+_THEME_JS = r"""
+var _THEME_KEY='reportstudio.out.theme';
+function _outTheme(){return document.documentElement.getAttribute('data-theme')==='dark'?'dark':'light';}
+function _cardBg(){var v=getComputedStyle(document.documentElement).getPropertyValue('--card').trim();return v||'#fff';}
+function applyOutTheme(t,save){
+ document.documentElement.setAttribute('data-theme',t==='dark'?'dark':'light');
+ if(save!==false){try{localStorage.setItem(_THEME_KEY,t);}catch(e){}}
+ var src=(t==='dark'?OPTS_D:OPTS_L);
+ (typeof CH!=='undefined'&&CH.length?CH:_allCH()).forEach(function(c,i){
+   if(c) c.setOption(src[i],true);
+ });
+ var b=document.getElementById('themeBtn');
+ if(b) b.textContent=(t==='dark'?'☀ 浅色':'☾ 深色');
+}
+function toggleOutTheme(){applyOutTheme(_outTheme()==='dark'?'light':'dark');}
+function _allCH(){return Array.prototype.map.call(
+ document.querySelectorAll('.chart'),function(el){return echarts.getInstanceByDom(el);});}
 """
 
 
@@ -73,10 +113,25 @@ def _echarts_tag(vendor_path: str) -> str:
     return '<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>'
 
 
+def _opts_json(blocks: list[dict], which: str) -> str:
+    """把全部图块的某一套 option 序列化成 JS 数组字面量。
+
+    "</script>" 必须转义：option 里带着用户文件的列名/标题，万一出现这段
+    字面量，HTML 解析器会就地结束 script 块，整页脚本全废。
+    """
+    items = []
+    for b in blocks:
+        opts = b.get("options") or {}
+        o = opts.get(which) or b.get("option") or {}
+        items.append(json.dumps(o, ensure_ascii=False).replace("</", "<\\/"))
+    return "[" + ",".join(items) + "]"
+
+
 def render_report(datasets: list[Dataset], spec: ReportSpec, chart_blocks: list[dict],
                   metric_cards: list[dict], summary: str, out_dir: str,
-                  vendor_path: str) -> str:
+                  vendor_path: str, theme: str = "light") -> str:
     os.makedirs(out_dir, exist_ok=True)
+    theme = T.norm(theme)
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     # 标题、列名、来源名全部来自用户文件，一律先转义再拼 HTML。
     # 不转义的话，一个叫「部门<script>…」的列名就能把报告页面搞坏。
@@ -84,11 +139,13 @@ def render_report(datasets: list[Dataset], spec: ReportSpec, chart_blocks: list[
     sources = _esc("、".join(d.name for d in datasets))
 
     parts: list[str] = []
-    parts.append(f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+    parts.append(f"""<!DOCTYPE html><html lang="zh-CN" data-theme="{theme}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title}</title><style>{CSS}</style></head><body><div class="wrap">
-<header><h1>{title}</h1>
-<div class="meta">生成时间 {now} ｜ 数据来源：{sources} ｜ 共 {len(datasets)} 个数据表</div>
+<header><div><h1>{title}</h1>
+<div class="meta">生成时间 {now} ｜ 数据来源：{sources} ｜ 共 {len(datasets)} 个数据表</div></div>
+<div class="grow"></div>
+<button class="dl" id="themeBtn" onclick="toggleOutTheme()">{'☀ 浅色' if theme == 'dark' else '☾ 深色'}</button>
 </header>""")
 
     if summary:
@@ -190,21 +247,27 @@ def render_report(datasets: list[Dataset], spec: ReportSpec, chart_blocks: list[
     parts.append("<footer>由 ReportStudio 自动生成 · 所有数值由程序计算产出</footer></div>")
     parts.append(_echarts_tag(vendor_path))
     parts.append("<script>")
-    for i, b in enumerate(chart_blocks):
+    parts.append("var OPTS_L=" + _opts_json(chart_blocks, "light") + ";")
+    parts.append("var OPTS_D=" + _opts_json(chart_blocks, "dark") + ";")
+    parts.append("var CH=[];")
+    parts.append(_THEME_JS)
+    for i in range(len(chart_blocks)):
         parts.append(
-            f"var c{i}=echarts.init(document.getElementById('chart{i}'));"
-            f"c{i}.setOption({json.dumps(b['option'], ensure_ascii=False)});"
-            f"window.addEventListener('resize',function(){{c{i}.resize();}});"
-        )
+            f"CH[{i}]=echarts.init(document.getElementById('chart{i}'));"
+            f"CH[{i}].setOption((_outTheme()==='dark'?OPTS_D:OPTS_L)[{i}]);"
+            f"window.addEventListener('resize',function(){{CH[{i}].resize();}});")
+    # 单文件被打开过、且上次现场切过主题 → 认用户自己的选择，不认生成时的初值
+    parts.append("try{var _st=localStorage.getItem(_THEME_KEY);"
+                 "if(_st&&_st!==_outTheme())applyOutTheme(_st,false);}catch(e){}")
     parts.append(
         "function _safe(s){return String(s).replace(/[^\\w\\u4e00-\\u9fa5-]/g,'_')"
         ".slice(0,40)||'chart';}"
         "function dlChart(i){"
         "var el=document.getElementById('chart'+i);"
         "var c=echarts.getInstanceByDom(el);if(!c)return;"
-        "var url=c.getDataURL({type:'png',pixelRatio:2,backgroundColor:'#fff'});"
+        "var url=c.getDataURL({type:'png',pixelRatio:2,backgroundColor:_cardBg()});"
         "var a=document.createElement('a');a.href=url;"
-        "a.download=_safe(el.previousElementSibling.firstElementChild.textContent)"
+        "a.download=_safe(el.closest('.chcard').querySelector('.ch.head span').textContent)"
         "+'.png';a.click();}"
     )
     parts.append("</script></body></html>")

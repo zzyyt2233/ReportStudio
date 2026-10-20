@@ -17,6 +17,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 import app as rs
+from core.routes import history as hist_mod
 
 _fail = 0
 
@@ -50,9 +51,12 @@ def main():
     # 跨盘符（C: 临时目录 vs E: 项目）会直接 ValueError。
     os.makedirs(os.path.join(ROOT, "temp"), exist_ok=True)
     tmp = tempfile.mkdtemp(prefix="hist_cleanup_", dir=os.path.join(ROOT, "temp"))
-    real_out = rs.OUT_DIR
-    rs.OUT_DIR = tmp
-    rs._HIST_CACHE.clear()
+    # history 路由搬到 core/routes/history.py 后，它自己 import 了 OUT_DIR /
+    # _HIST_CACHE 的**引用**——patch core.state 或 app 都不生效，必须 patch
+    # hist_mod 上的名字，否则测试会在真实 outputs 上跑（危险且断言必挂）。
+    real_out = hist_mod.OUT_DIR
+    hist_mod.OUT_DIR = tmp
+    hist_mod._HIST_CACHE.clear()
     try:
         old_dir = _mk_report(tmp, f"销售分析_{_stamp(100)}", with_chart=True)
         new_dir = _mk_report(tmp, f"周报_{_stamp(1)}")
@@ -62,44 +66,44 @@ def main():
             f.write("x")
 
         # ——— 1. /api/history 的 grand_* ———
-        h = rs.history(q="", limit=50)
+        h = hist_mod.history(q="", limit=50)
         ok(f"grand_total = 3（旧+新+无时间戳，残片和散文件不算）→ {h['grand_total']}",
            h["grand_total"] == 3)
         ok("grand_size > 0（含旧报告 charts 里的 PNG）", h["grand_size"] > 0)
-        hq = rs.history(q="周报", limit=50)
+        hq = hist_mod.history(q="周报", limit=50)
         ok(f"搜索过滤不影响 grand_total（3）→ {hq['grand_total']}，total=1 → {hq['total']}",
            hq["grand_total"] == 3 and hq["total"] == 1)
 
         # ——— 2. days 下限 ———
-        r = rs.history_cleanup({"days": 3, "apply": True})
+        r = hist_mod.history_cleanup({"days": 3, "apply": True})
         ok("days=3 被拒绝", not r.get("ok") and "7" in str(r.get("error", "")))
-        r = rs.history_cleanup({"days": "abc", "apply": True})
+        r = hist_mod.history_cleanup({"days": "abc", "apply": True})
         ok("days 非数字被拒绝", not r.get("ok"))
 
         # ——— 3. apply=False 只统计不删 ———
-        r = rs.history_cleanup({"days": 30, "apply": False})
+        r = hist_mod.history_cleanup({"days": 30, "apply": False})
         ok(f"统计出 1 份旧报告 → {r.get('removed')}", r.get("removed") == 1)
         ok(f"统计出体积 > 0 → {r.get('freed')}", r.get("freed", 0) > 0)
         ok("统计模式没真删（旧目录还在）", os.path.isdir(old_dir))
 
         # ——— 4. apply=True 真删 ———
-        rs._HIST_CACHE.clear()     # 模拟缓存里有旧条目
-        rs._HIST_CACHE[os.path.basename(old_dir)] = {"mtime": 0, "entry": {}}
-        r = rs.history_cleanup({"days": 30, "apply": True})
+        hist_mod._HIST_CACHE.clear()     # 模拟缓存里有旧条目
+        hist_mod._HIST_CACHE[os.path.basename(old_dir)] = {"mtime": 0, "entry": {}}
+        r = hist_mod.history_cleanup({"days": 30, "apply": True})
         ok(f"删掉 1 份 → {r.get('removed')}", r.get("removed") == 1)
         ok("旧报告目录没了", not os.path.exists(old_dir))
-        ok("缓存里的旧条目被清掉", os.path.basename(old_dir) not in rs._HIST_CACHE)
+        ok("缓存里的旧条目被清掉", os.path.basename(old_dir) not in hist_mod._HIST_CACHE)
 
         # ——— 5. 不能误伤 ———
         ok("一天前的新报告还在", os.path.isdir(new_dir))
         ok("没有时间戳的目录还在（分不清新旧，宁留勿删）", os.path.isdir(manual_dir))
 
         # ——— 6. 删完之后 grand_* 跟着变 ———
-        h2 = rs.history(q="", limit=50)
+        h2 = hist_mod.history(q="", limit=50)
         ok(f"清理后 grand_total = 2 → {h2['grand_total']}", h2["grand_total"] == 2)
     finally:
-        rs.OUT_DIR = real_out
-        rs._HIST_CACHE.clear()
+        hist_mod.OUT_DIR = real_out
+        hist_mod._HIST_CACHE.clear()
         # 测试目录自己收尾
         import shutil
         try:

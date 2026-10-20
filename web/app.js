@@ -138,6 +138,121 @@ function esc(s) {
 
 const isNum = (c) => c.dtype === 'number';
 
+/* ---------- 深浅主题 ----------
+   工作台自己切换（data-theme 打在 <html> 上，style.css 里两套变量整组换），
+   并把当前主题随「生成报告 / 看板预览 / 保存到看板」带往后端 ——
+   产出的单文件初值跟工作台一致；单文件内部另有自己的切换按钮，互不干扰。 */
+/* 键名带了 v2：老版本的 initTheme 默认浅色，而且每次打开都会把这个默认值写回
+   localStorage —— 也就是说几乎所有老用户浏览器里都躺着一个没有意义的 'light'。
+   换成新键之后那一笔旧默认值自然作废：新版首次打开走深色（工作台的主设计），
+   用户自己点过「切换主题」之后记住的才是浅色。 */
+const THEME_KEY = 'reportstudio.theme.v2';
+function curTheme() {
+  return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+}
+function applyTheme(t) {
+  t = t === 'dark' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', t);
+  try { localStorage.setItem(THEME_KEY, t); } catch (e) { /* 隐私模式写不进就算了 */ }
+  const b = $('#themeBtnText');
+  if (b) b.textContent = t === 'dark' ? '浅色' : '深色';
+}
+/* 深色是这套工作台的主设计（玻璃卡片、霓虹强调色都是按深色配的），
+   所以首次打开走深色；用户在界面上切过浅色之后就记住浅色，不再改回去。 */
+(function initTheme() {
+  let t = 'dark';
+  try { t = localStorage.getItem(THEME_KEY) || 'dark'; } catch (e) { /* 读不到就用默认 */ }
+  applyTheme(t);
+})();
+if ($('#themeBtn')) $('#themeBtn').onclick = () => applyTheme(curTheme() === 'dark' ? 'light' : 'dark');
+
+/* ---------- 侧栏导航：一屏只显示一块工作台 ----------
+   原来六个步骤全铺在同一页，三列滚到底要五千多像素，找按钮全靠记忆。
+   现在收进左侧导航，切换只动 class —— 不重建任何 DOM，
+   已填的表单、已配的图表、预览里的报告都不会因为切屏而丢。 */
+const VIEW_KEY = 'reportstudio.view';
+const VIEWS = {
+  overview:   ['分析概览', '这一轮会话的数据、产出和下一步。'],
+  ingest:     ['导入数据', '拖文件、点选、粘贴表格，或者先载入一份示例数据试。'],
+  database:   ['数据库取数', '只读 SQL；取回来的结果和导入的表格走同一条出图链路。'],
+  data:       ['数据预览与修正', '改表头行号、改列类型，看解析提示；筛选、排序、导出。'],
+  spec:       ['图表配置', '一句话说需求，或直接勾图型 / 横轴 / 数值 / 聚合 / 排序。'],
+  dashboards: ['数据看板', '把图与指标排成一屏。存的是「怎么算」，每次打开都按当前数据重算。'],
+  output:     ['报告输出', '报告、看板与格式转换都在这一块预览区，不用开第二个窗口。'],
+  history:    ['历史报告', '搜索、直接打开、补导出 Word / PDF、逐份删除。'],
+};
+
+/* 概览区的数字来源：数据表与行数在 STORE 里，图数与指标数在读 DOM，
+   看板数与报告数由各自的列表渲染回填 —— 这里只负责显示，不另发请求。
+   报告数只用后端的 grand_*：清单按目录名倒序排、默认只回前 50 条，
+   所以「最新一份是哪份」在这个接口上并不可靠，概览里就不装作知道。 */
+let dashCount = 0;
+let histGrand = 0;
+let histSize = 0;
+
+function setTxt(sel, txt) {
+  const el = $(sel);
+  if (el) el.textContent = String(txt);
+}
+
+function refreshKpi() {
+  const ids = Object.keys(STORE);
+  const ds = STORE[curId];
+  const charts = $$('.chart-card').length;
+  const metrics = $$('#metricCols .chip.on').length;
+  const totalRows = ids.reduce((n, id) => n + (STORE[id].total_rows || 0), 0);
+
+  setTxt('#kpiTables', ids.length);
+  setTxt('#kpiRows', ds ? (ds.total_rows || 0) : 0);
+  setTxt('#kpiRowsFoot', ds
+    ? `${ds.columns.length} 列 · 来源 ${ds.source_type} · ${ids.length} 张表共 ${totalRows.toLocaleString()} 行`
+    : '列数与来源见「数据预览」');
+  setTxt('#kpiCharts', charts);
+  setTxt('#kpiDashboards', dashCount);
+  setTxt('#kpiReports', histGrand);
+  setTxt('#kpiReportsFoot', histGrand
+    ? `共 ${fmtSize(histSize)} · 逐份看「历史报告」`
+    : '还没有生成过报告');
+
+  setTxt('#navDsCount', ids.length);
+  setTxt('#navChartCount', charts);
+  setTxt('#navDashCount', dashCount);
+  setTxt('#navHistCount', histGrand);
+
+  const pill = $('#ctxPill');
+  if (pill) {
+    pill.textContent = ids.length
+      ? `${ids.length} 张表 · ${totalRows.toLocaleString()} 行 · ${charts} 张图`
+        + (metrics ? ` · ${metrics} 个指标` : '')
+      : '尚未载入数据';
+  }
+}
+
+/* keepScroll：启动时恢复上次停留的那一屏，不该把页面顶回最上面。 */
+function gotoView(name, opts) {
+  if (!VIEWS[name]) name = 'overview';
+  $$('.view').forEach(v => v.classList.toggle('on', v.dataset.view === name));
+  $$('.nav-item').forEach(b => {
+    const on = b.dataset.goto === name;
+    b.classList.toggle('on', on);
+    if (on) b.setAttribute('aria-current', 'page');
+    else b.removeAttribute('aria-current');
+  });
+  setTxt('#viewTitle', VIEWS[name][0]);
+  setTxt('#viewSub', VIEWS[name][1]);
+  const bar = $('#globalMsg');
+  if (bar) { bar.hidden = true; clearTimeout(_gmsgTimer); }
+  try { localStorage.setItem(VIEW_KEY, name); } catch (e) { /* 存不进不影响本次切换 */ }
+  if (!opts || !opts.keepScroll) {
+    // 换屏之后从这一屏的最上面看起。不用 window.scrollTo：jsdom 里它会打
+    // 一串 "Not implemented" 噪音，而根滚动元素就是 documentElement，直接赋值即可。
+    document.documentElement.scrollTop = 0;
+  }
+}
+
+$$('.nav-item, .flowcard').forEach(b => { b.onclick = () => gotoView(b.dataset.goto); });
+
+
 function fmtSize(n) {
   if (!n) return '';
   if (n < 1024) return n + ' B';
@@ -255,20 +370,26 @@ async function upload(files) {
   const fd = new FormData();
   Array.from(files).forEach(f => fd.append('files', f));
   const res = await post('/api/upload', fd, true);
+  let okCount = 0;
   (res.results || []).forEach(r => {
-    if (r.ok) { STORE[r.dataset.id] = r.dataset; curId = r.dataset.id; }
+    if (r.ok) { okCount++; STORE[r.dataset.id] = r.dataset; curId = r.dataset.id; }
     else { toast('genMsg', r.name + '：' + r.error, true); }
   });
   renderFiles(); renderDsSelect(); renderMerge(); renderChartsPanel();
+  // 导完直接把人带到预览那一屏 —— 分屏之后不跳的话，他会以为点了没反应。
+  // 有失败文件时留在原地，报错就在眼前，不用跳过去再折回来。
+  if (okCount) gotoView('data');
 }
 
 $('#pasteBtn').onclick = async () => {
   const text = $('#paste').value.trim();
   if (!text) return;
   const res = await post('/api/paste', { text });
-  if (res.ok) { STORE[res.dataset.id] = res.dataset; curId = res.dataset.id; $('#paste').value = ''; }
-  else toast('genMsg', res.error || '粘贴导入失败', true);
+  if (res.ok) {
+    STORE[res.dataset.id] = res.dataset; curId = res.dataset.id; $('#paste').value = '';
+  } else toast('genMsg', res.error || '粘贴导入失败', true);
   renderFiles(); renderDsSelect(); renderMerge(); renderChartsPanel();
+  if (res.ok) gotoView('data');
 };
 
 /* 第一次用的人（尤其是拿到分享包的）手上没有现成数据，打开是空的，看不出能干什么。
@@ -321,7 +442,8 @@ $('#demoBtn').onclick = async () => {
   STORE[res.dataset.id] = res.dataset;
   curId = res.dataset.id;
   renderFiles(); renderDsSelect(); renderMerge(); renderChartsPanel();
-  toast('genMsg', '已载入示例数据（6 个月 × 3 区域 × 2 条产品线），右侧可以直接选图表或生成报告');
+  gotoView('data');
+  toast('genMsg', '已载入示例数据（6 个月 × 3 区域 × 2 条产品线），在「图表配置」里可以直接选图或生成报告');
 };
 
 function renderFiles() {
@@ -338,6 +460,7 @@ function renderFiles() {
       <button class="rm" data-id="${ds.id}" aria-label="移除数据表 ${esc(ds.name)}">×</button>`;
     box.appendChild(el);
   });
+  refreshKpi();
   $$('#files .rm').forEach(x => x.onclick = async () => {
     const id = x.dataset.id;
     delete STORE[id];
@@ -416,19 +539,98 @@ function renderWarns(ds) {
   box.innerHTML = ds.warnings.map(w => `<div>${esc(w)}</div>`).join('');
 }
 
+/* ---------- 预览表：关键字筛选 + 点表头排序 ----------
+   筛选与排序都是纯前端的（行数据本来就在 STORE 里），不请求后端 ——
+   只影响「看」，不动数据本身；导出、画图、生成报告走的仍是原始数据集。 */
+let tblSort = { col: -1, dir: 1 };
+let tblFilter = '';
+let tblRows = 60;
+let tblDsId = null;
+
+function resetTableView() {
+  tblSort = { col: -1, dir: 1 };
+  tblFilter = ''; tblRows = 60;
+  if ($('#tblFilter')) $('#tblFilter').value = '';
+  if ($('#tblRows')) $('#tblRows').value = '60';
+}
+
+function _cellText(v) {
+  return v === null || v === undefined ? '' : String(v);
+}
+
+function filteredRows(ds) {
+  let rows = ds.rows || [];
+  const words = tblFilter.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length) {
+    rows = rows.filter(r => {
+      const hay = ds.columns.map(c => _cellText(r[c.name]).toLowerCase()).join('\u0001');
+      return words.every(w => hay.indexOf(w) >= 0);
+    });
+  }
+  if (tblSort.col >= 0) {
+    const c = ds.columns[tblSort.col];
+    const num = isNum(c);
+    const sgn = tblSort.dir;
+    rows = rows.slice().sort((a, b) => {
+      const va = a[c.name], vb = b[c.name];
+      const ea = va === null || va === undefined || va === '';
+      const eb = vb === null || vb === undefined || vb === '';
+      if (ea && eb) return 0;
+      if (ea) return 1;          // 空值恒排最后，升降都一样，看数不添乱
+      if (eb) return -1;
+      if (num) return (Number(va) - Number(vb)) * sgn;
+      return String(va).localeCompare(String(vb), 'zh') * sgn;
+    });
+  }
+  return rows;
+}
+
 function renderTable(ds) {
   const t = $('#ptable');
-  let h = '<thead><tr>' + ds.columns.map(c => `<th>${esc(c.name)}</th>`).join('') + '</tr></thead><tbody>';
-  ds.rows.slice(0, 60).forEach(r => {
+  if (tblDsId !== curId) { tblDsId = curId; resetTableView(); }
+  const rows = filteredRows(ds);
+  let h = '<thead><tr>' + ds.columns.map((c, i) => {
+    const arr = tblSort.col === i ? (tblSort.dir > 0 ? ' ▲' : ' ▼') : '';
+    return `<th class="srt-col" data-i="${i}" title="点击排序：${esc(c.name)}" tabindex="0">`
+      + esc(c.name) + (arr ? `<span class="sarr">${arr.trim()}</span>` : '') + '</th>';
+  }).join('') + '</tr></thead><tbody>';
+  const cap = tblRows > 0 ? rows.slice(0, tblRows) : rows;
+  cap.forEach(r => {
     h += '<tr>' + ds.columns.map(c => {
-      const v = r[c.name];
-      const s = v === null || v === undefined ? '' : String(v);
+      const s = _cellText(r[c.name]);
       const align = isNum(c) ? ' style="text-align:right"' : '';
       return `<td${align}>${esc(s)}</td>`;
     }).join('') + '</tr>';
   });
   t.innerHTML = h + '</tbody>';
+  $$('#ptable th').forEach(th => {
+    const go = () => {
+      const i = +th.dataset.i;
+      if (tblSort.col === i) {
+        tblSort.dir = -tblSort.dir;
+      } else { tblSort = { col: i, dir: 1 }; }
+      renderTable(ds);
+    };
+    th.onclick = go;
+    th.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
+  });
+  const info = $('#tblInfo');
+  if (info) {
+    const total = (ds.rows || []).length;
+    info.textContent = rows.length === total
+      ? `共 ${total} 行 · 显示前 ${cap.length} 行`
+      : `筛出 ${rows.length} / ${total} 行 · 显示前 ${cap.length} 行`;
+  }
 }
+
+if ($('#tblFilter')) $('#tblFilter').oninput = e => { tblFilter = e.target.value; renderTable(STORE[curId] || {columns:[],rows:[]}); };
+if ($('#tblRows')) $('#tblRows').onchange = e => { tblRows = parseInt(e.target.value, 10) || 0; renderTable(STORE[curId] || {columns:[],rows:[]}); };
+if ($('#tblClear')) $('#tblClear').onclick = () => {
+  resetTableView();
+  if ($('#tblFilter')) $('#tblFilter').value = '';
+  if ($('#tblRows')) $('#tblRows').value = '60';
+  if (STORE[curId]) renderTable(STORE[curId]);
+};
 
 $('#applyHeader').onclick = () => applyFix({ header_row: Math.max(1, parseInt($('#headerRow').value || '1', 10)) });
 
@@ -444,7 +646,7 @@ async function applyFix(payload) {
 if ($('#exportDs')) {
   $('#exportDs').onclick = async () => {
     const ds = STORE[curId];
-    if (!ds) { toast('genMsg', '先在右边选一张数据表', true); return; }
+    if (!ds) { toast('genMsg', '先在「数据预览」里选一张数据表', true); return; }
     const btn = $('#exportDs');
     const old = btn.textContent;
     btn.disabled = true; btn.textContent = '导出中…';
@@ -453,8 +655,10 @@ if ($('#exportDs')) {
       const res = await post('/api/export_dataset', { id: curId, kind });
       if (res.ok) {
         download(res.url);
-        toast('genMsg', `已导出「${ds.name}」${res.rows} 行 × ${res.cols} 列`
-          + (kind === 'csv' ? '（CSV 带 BOM，Excel 双击不乱码）' : ''));
+        const extra = kind === 'csv' ? '（CSV 带 BOM，Excel 双击不乱码）'
+          : (res.written && res.rows && res.written < res.rows
+            ? `（文档里放了前 ${res.written} 行，完整数据请导 CSV）` : '');
+        toast('genMsg', `已导出「${ds.name}」${res.rows} 行 × ${res.cols} 列` + extra);
       } else {
         toast('genMsg', res.error || '导出失败', true);
       }
@@ -490,6 +694,7 @@ function renderChartsPanel() {
   // 用户得从头再配一遍 —— 而「改完数据发现图没了」会被当成工具坏了。
   const keep = $$('.chart-card').map(collectCard);
   $$('.chart-card').forEach((c, i) => fillChartCard(c, ds, keep[i] || {}));
+  refreshKpi();
 }
 
 function renderMetricChips(ds) {
@@ -499,7 +704,10 @@ function renderMetricChips(ds) {
   box.innerHTML = nums.map(n =>
     `<span class="chip" data-n="${esc(n)}">${esc(n)}</span>`).join('') ||
     '<span class="hint">这张表没有数值列</span>';
-  $$('#metricCols .chip').forEach(c => c.onclick = () => c.classList.toggle('on'));
+  $$('#metricCols .chip').forEach(c => c.onclick = () => {
+    c.classList.toggle('on');
+    refreshKpi();          // 概览的「N 个指标」跟着走
+  });
 }
 
 function colOptions(ds, onlyNum, sel) {
@@ -563,7 +771,7 @@ function addChartCard(spec) {
       </select>
       <label class="c-dual-wrap"><input type="checkbox" class="c-dual"> 双轴（第二个数列走右轴）</label></div>`;
   $('#charts').appendChild(el);
-  el.querySelector('.x').onclick = () => { el.remove(); scheduleSaveDraft(); };
+  el.querySelector('.x').onclick = () => { el.remove(); scheduleSaveDraft(); refreshKpi(); };
   el.querySelector('.c-x').onchange = () => refreshSortOptions(el);
   el.querySelector('.c-swap').onclick = () => swapAxis(el);
   el.querySelector('.c-type').onchange = () => {
@@ -576,6 +784,7 @@ function addChartCard(spec) {
   // 这里不要再绑一次，两处都绑的话后绑的会把刷新逻辑覆盖掉。
   fillChartCard(el, STORE[curId], spec);
   scheduleSaveDraft();
+  refreshKpi();
 }
 
 function fillChartCard(el, ds, spec) {
@@ -840,6 +1049,7 @@ function collectSpec() {
     metrics: $$('#metricCols .chip.on').map(c => c.dataset.n),
     detail_sort_by: ($('#rDetailCol') || {}).value || '',
     detail_sort_order: ($('#rDetailDir') || {}).value || 'asc',
+    theme: curTheme(),
   };
 }
 
@@ -904,10 +1114,12 @@ $('#gen').onclick = async () => {
       : `已生成 ${res.charts} 张图 · ${res.metrics} 个指标 · 输出目录 ${res.dir}`;
     ['openNew', 'dlHtml', 'dlMd', 'dlDocx', 'dlPdf', 'dlPng']
       .forEach(b => $('#' + b).disabled = false);
+    // 生成完直接切到「报告输出」这一屏，就地看结果 —— 分屏之后留在配置那一屏，
+    // 用户会以为点完什么都没发生。
+    gotoView('output');
+    await setView('report');
     toast('genMsg', '生成完成');
-    // 生成完停在「报告」这一屏。看板不用单独管：切过去会拿同一份配置重算，
-    // 所以它和手上这份报告永远是一致的。
-    setView('report');
+    // 看板不用单独管：切过去会拿同一份配置重算，所以它和手上这份报告永远是一致的。
     renderHistory();
   } catch (e) {
     toast('genMsg', '生成出错：' + e, true);
@@ -994,18 +1206,19 @@ function dashPayload(spec) {
     merge_mode: spec.merge_mode,
     metrics: spec.metrics,
     charts: spec.charts,
+    theme: curTheme(),
   };
 }
 
 async function renderDash(toFrame) {
   const spec = collectSpec();
   if (!spec.dataset_ids.length) {
-    $('#outInfo').textContent = '还没有数据 —— 先在左边导入文件或用 SQL 取数';
+    $('#outInfo').textContent = '还没有数据 —— 先去「导入数据」或「数据库取数」准备数据';
     setFrame('');
     return;
   }
   if (!spec.charts.length && !spec.metrics.length) {
-    $('#outInfo').textContent = '看板还是空的 —— 先在「说清需求」里配一张图，或勾一个指标列';
+    $('#outInfo').textContent = '看板还是空的 —— 先在「图表配置」里配一张图，或勾一个指标列';
     setFrame('');
     return;
   }
@@ -1034,44 +1247,42 @@ $('#tabReport').onclick = () => setView('report');
 $('#tabDash').onclick = () => setView('dash');
 $('#tabConvert').onclick = () => setView('convert');
 
-// ---- 格式转换分区 ----
-let convFile = null;
+// ---- 格式转换分区（支持多选，与导入区一致）----
+let convFiles = [];
+const CONV_OK = /\.(docx|pdf)$/i;
+
+function setConvFiles(list) {
+  const arr = Array.from(list || []).filter((f) => CONV_OK.test(f.name));
+  if (!arr.length) { $('#convMsg').textContent = '只支持 .docx / .pdf 文件'; return; }
+  convFiles = arr;
+  $('#convDrop').textContent = arr.length === 1
+    ? arr[0].name
+    : `已选 ${arr.length} 个：` + arr.slice(0, 3).map((f) => f.name).join('、')
+      + (arr.length > 3 ? ' …' : '');
+  $('#convDrop').classList.add('has');
+  $('#convBtn').disabled = false;
+  $('#convMsg').textContent = '';
+  // 目标格式跟着第一个文件自动切到相反的，用户仍可手动改
+  const target = /\.pdf$/i.test(arr[0].name) ? 'docx' : 'pdf';
+  document.querySelector(`input[name=convTo][value="${target}"]`).checked = true;
+}
 $('#convDrop').addEventListener('click', () => $('#convFile').click());
 $('#convDrop').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('#convFile').click(); }
 });
-$('#convFile').addEventListener('change', (e) => {
-  const f = e.target.files[0];
-  if (!f) return;
-  if (!/\.(docx|pdf)$/i.test(f.name)) { $('#convMsg').textContent = '只支持 .docx / .pdf 文件'; return; }
-  convFile = f;
-  $('#convDrop').textContent = f.name;
-  $('#convDrop').classList.add('has');
-  $('#convBtn').disabled = false;
-  $('#convMsg').textContent = '';
-  const target = /\.pdf$/i.test(f.name) ? 'docx' : 'pdf';
-  document.querySelector(`input[name=convTo][value="${target}"]`).checked = true;
-});
+$('#convFile').addEventListener('change', (e) => setConvFiles(e.target.files));
 ['dragover', 'dragenter'].forEach(ev => $('#convDrop').addEventListener(ev, e => { e.preventDefault(); $('#convDrop').classList.add('over'); }));
 ['dragleave', 'drop'].forEach(ev => $('#convDrop').addEventListener(ev, e => { e.preventDefault(); $('#convDrop').classList.remove('over'); }));
-$('#convDrop').addEventListener('drop', (e) => {
-  const f = e.dataTransfer.files[0];
-  if (f && /\.(docx|pdf)$/i.test(f.name)) {
-    convFile = f; $('#convDrop').textContent = f.name;
-    $('#convDrop').classList.add('has'); $('#convBtn').disabled = false;
-    const target = /\.pdf$/i.test(f.name) ? 'docx' : 'pdf';
-    document.querySelector(`input[name=convTo][value="${target}"]`).checked = true;
-  }
-});
+$('#convDrop').addEventListener('drop', (e) => setConvFiles(e.dataTransfer.files));
 $('#convBtn').addEventListener('click', async () => {
-  if (!convFile) return;
+  if (!convFiles.length) return;
   const to = document.querySelector('input[name=convTo]:checked').value;
-  const srcExt = /\.pdf$/i.test(convFile.name) ? 'pdf' : 'docx';
-  if (srcExt === to) { $('#convMsg').textContent = '源格式与目标相同，无需转换'; return; }
   $('#convBtn').disabled = true;
-  $('#convMsg').textContent = '转换中…';
+  $('#convMsg').textContent = convFiles.length > 1
+    ? `转换中…（${convFiles.length} 个文件，完成后打包下载）`
+    : '转换中…';
   const fd = new FormData();
-  fd.append('file', convFile);
+  convFiles.forEach((f) => fd.append('files', f));
   fd.append('to', to);
   try {
     const r = await fetch('/api/convert', { method: 'POST', body: fd });
@@ -1085,12 +1296,19 @@ $('#convBtn').addEventListener('click', async () => {
     const cd = r.headers.get('content-disposition') || '';
     const m = /filename\*?=(?:UTF-8'')?["']?([^"';]+)/i.exec(cd);
     const name = m ? decodeURIComponent(m[1]) : ('converted.' + to);
-    const engine = r.headers.get('x-convert-engine') === 'libreoffice' ? 'LibreOffice' : '纯 Python';
+    const engineRaw = r.headers.get('x-convert-engine') || '';
+    const engine = engineRaw.includes('libreoffice') ? 'LibreOffice' : '纯 Python';
+    // 批量时可能有部分失败，后端把清单放在这个头里
+    const failed = decodeURIComponent(r.headers.get('x-convert-failed') || '');
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = name; a.click();
-    $('#convResult').innerHTML = `<div class="fileitem">已转换：<b>${name}</b>（${engine} 引擎） · <a href="${url}" download="${name}">下载</a></div>`;
-    $('#convMsg').textContent = `完成（${engine} 引擎），已自动下载`;
+    $('#convResult').innerHTML =
+      `<div class="fileitem">已转换：<b>${name}</b>（${engine} 引擎） · <a href="${url}" download="${name}">下载</a></div>`
+      + (failed ? `<div class="fileitem warn">部分文件失败：${failed}</div>` : '');
+    $('#convMsg').textContent = failed
+      ? `已完成，但有文件失败：${failed}`
+      : `完成（${engine} 引擎），已自动下载`;
   } catch (err) {
     $('#convMsg').textContent = '错误：' + err;
   }
@@ -1126,11 +1344,32 @@ function download(url) {
   a.href = url; a.click();
 }
 
+let _gmsgTimer = null;
 function toast(id, msg, isErr) {
   const el = $('#' + id);
   if (!el) return;
   el.textContent = msg;
   el.className = 'msg' + (isErr ? ' err' : '');
+  mirrorToast(el, msg, isErr);
+}
+
+/* 分成几屏之后，「把提示写在另一屏里」等于没写 —— 导入报错、导出失败这些
+   都是写在 #genMsg / #dbSqlMsg 里的，而用户当时人在「导入数据」那一屏。
+   原地照旧写一份（位置语义都不变），再在当前这一屏顶部的消息条上镜像一份；
+   原地本来就看得见时不重复显示。 */
+function mirrorToast(el, msg, isErr) {
+  const bar = $('#globalMsg');
+  if (!bar) return;
+  let owner = el;
+  while (owner && !(owner.classList && owner.classList.contains('view'))) {
+    owner = owner.parentElement;
+  }
+  if (owner && owner.classList.contains('on')) { bar.hidden = true; return; }
+  bar.textContent = msg;
+  bar.className = 'gmsg' + (isErr ? ' err' : '');
+  bar.hidden = false;
+  clearTimeout(_gmsgTimer);
+  _gmsgTimer = setTimeout(() => { bar.hidden = true; }, 9000);
 }
 
 /* ---------- 历史报告 ----------
@@ -1238,16 +1477,19 @@ async function renderHistory() {
   const res = await api('/api/history?q=' + encodeURIComponent(histQ) + '&limit=50')
     .catch(() => ({ items: [] }));
   const items = res.items || [];
+  // grand_* 是 outputs 里全部报告的份数和体积（服务端算的，不受搜索词影响）；
+  // 老后端没有这两个字段时退回 total，别显示成 0。
+  const gt = res.grand_total || res.total || 0;
+  const gs = res.grand_size || 0;
   const cnt = $('#histCount');
   if (cnt) {
-    // grand_* 是 outputs 里全部报告的份数和体积（服务端算的，不受搜索词影响）；
-    // 老后端没有这两个字段时退回 total，别显示成 0。
-    const gt = res.grand_total || res.total || 0;
-    const gs = res.grand_size || 0;
     cnt.textContent = !gt ? ''
       : `共 ${gt} 份${gs ? ' · ' + fmtSize(gs) : ''}`
         + (res.total > items.length ? `，显示 ${items.length} 份` : '');
   }
+  histGrand = gt;
+  histSize = gs;
+  refreshKpi();
   // 按钮显隐要在提前 return 之前算：列表为空（全删光 / 刚装好）时
   // 也得让清理按钮收起来，不然会停留在上一轮的旧状态
   updateHistCleanBtn(res);
@@ -1447,6 +1689,11 @@ function restoreDraft() {
   const draft = restoreDraft();
   renderHistory();
   refreshResidue();
+  refreshKpi();
+  // 停在上次离开时那一屏（keepScroll：别把页面顶回最上面）
+  let startView = 'overview';
+  try { startView = localStorage.getItem(VIEW_KEY) || 'overview'; } catch (e) { /* 读不到就回概览 */ }
+  gotoView(startView, { keepScroll: true });
 
   // 启动提示合并成一条：原来两处各 toast 一次，后写的会把前一条盖掉
   const tips = [];
@@ -1669,12 +1916,13 @@ async function dbExec(doImport) {
       curId = res.dataset.id;
       renderFiles(); renderDsSelect(); renderMerge(); renderChartsPanel();
       const sug = res.suggest_charts || [];
+      gotoView('data');       // 取回来的表先看到它长什么样，再去配图
       if ($('#dbAutoChart').checked && sug.length) {
         $('#charts').innerHTML = '';
         sug.forEach(s => addChartCard(s));
-        toast('genMsg', '已导入为数据表并预填了图表配置，往下拉到「告诉我你要什么」就能生成报告');
+        toast('genMsg', '已导入为数据表并预填了图表配置，切到「图表配置」就能生成报告');
       } else {
-        toast('genMsg', '已导入为数据表，可在「告诉我你要什么」里配置图表');
+        toast('genMsg', '已导入为数据表，可在「图表配置」里配置图表');
       }
     }
   } catch (e) {
@@ -1772,14 +2020,32 @@ if ($('#dbTest')) {
 
 const dashMsg = (m, err) => toast('dashMsg', m, err);
 
+/* 看板列表排序：更新时间（默认，后端已倒序）/ 名称（中文）/ 图数。
+   选择记在 localStorage，重开页面还是自己习惯的那个序。 */
+const DASH_SORT_KEY = 'reportstudio.dashsort';
+function sortDashItems(items) {
+  let mode = 'updated';
+  try { mode = localStorage.getItem(DASH_SORT_KEY) || 'updated'; } catch (e) { /* 读不到按默认 */ }
+  const sel = $('#dashSort');
+  if (sel && [...sel.options].some(o => o.value === mode)) sel.value = mode;
+  else mode = (sel || {}).value || 'updated';
+  const arr = items.slice();
+  if (mode === 'name') arr.sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh'));
+  else if (mode === 'charts') arr.sort((a, b) => (b.charts || 0) - (a.charts || 0));
+  else arr.sort((a, b) => String(b.updated || '').localeCompare(String(a.updated || '')));
+  return arr;
+}
+
 async function renderDashList() {
   const box = $('#dashList');
   if (!box) return;
   try {
     const res = await get('/api/dashboards');
-    const items = res.items || [];
+    const items = sortDashItems(res.items || []);
+    dashCount = items.length;
+    refreshKpi();
     if (!items.length) {
-      box.innerHTML = '<span class="hint">还没有存过看板。配好上面的图表，起个名字点「保存到看板」。</span>';
+      box.innerHTML = '<span class="hint">还没有存过看板。在「图表配置」里配好图，起个名字点「保存到看板」。</span>';
       return;
     }
     box.innerHTML = '';
@@ -1789,13 +2055,15 @@ async function renderDashList() {
       // metrics=0 不是「没有指标」，而是「按表里的数值列自动出」——
       // 直接写「0 指标」会让人以为看板上是空的，对不上实际看到的一排指标卡
       const mtext = it.metrics ? (it.metrics + ' 指标') : '指标按列自动';
+      const dstext = it.datasets ? (' · ' + it.datasets + ' 张表') : '';
       // 名称与元信息竖着排成一块，右边单独放按钮组。
       // 原来是三组 span + 两个按钮平铺同一行，只有名称可收缩，
       // 名称被挤到几像素宽、汉字压成竖条，右侧「删除」还被顶出容器。
       el.innerHTML = '<div class="d-main">'
         + '<span class="nm">' + esc(it.name) + '</span>'
-        + '<span class="src">' + it.charts + ' 图 · ' + mtext
-        + (it.updated ? ' · ' + esc(it.updated) : '') + '</span>'
+        + '<span class="src">' + it.charts + ' 图 · ' + mtext + dstext
+        + (it.updated ? ' · ' + esc(it.updated) : '')
+        + '</span>'
         + '</div>';
       const acts = document.createElement('span');
       acts.className = 'd-acts';
@@ -1835,12 +2103,13 @@ async function dashOpen(id) {
       m += '　⚠ 有 ' + res.missing.length + ' 张表不在当前会话里，对应图已跳过';
     }
     if (!goPlaceholder(win, res.url)) {
-      // 占位窗口也被拦（罕见）：退到下方预览区，别让结果彻底看不到
+      // 占位窗口也被拦（罕见）：退到「报告输出」那一屏的预览区，别让结果彻底看不到
+      gotoView('output');
       switchTab('dash');
       setFrame(res.url);
       $('#dashOpenNew').disabled = false;
       $('#outInfo').textContent = '看板「' + res.name + '」· ' + res.charts + ' 张图';
-      m += '　（新窗口被浏览器拦下，已改在下方预览区显示）';
+      m += '　（新窗口被浏览器拦下，已改在「报告输出」里显示）';
     }
     dashMsg(m, (res.missing || []).length > 0);
     renderDashList();
@@ -1882,11 +2151,12 @@ async function dashSave() {
       m += '　⚠ 有 ' + res.missing.length + ' 张表不在当前会话里';
     }
     if (!goPlaceholder(win, res.url)) {
+      gotoView('output');
       switchTab('dash');
       setFrame(res.url);
       $('#dashOpenNew').disabled = false;
       $('#outInfo').textContent = '看板「' + res.name + '」· ' + res.charts + ' 张图';
-      m = m.replace('，已在新窗口打开', '　（新窗口被浏览器拦下，已改在下方预览区显示）');
+      m = m.replace('，已在新窗口打开', '　（新窗口被浏览器拦下，已改在「报告输出」里显示）');
     }
     dashMsg(m, (res.missing || []).length > 0);
     if (!$('#dashName').value.trim()) $('#dashName').value = res.name;
@@ -1900,5 +2170,9 @@ async function dashSave() {
 if ($('#dashSave')) {
   $('#dashSave').onclick = dashSave;
   $('#dashRefreshList').onclick = () => { dashMsg('刷新列表…'); renderDashList(); };
+  if ($('#dashSort')) $('#dashSort').onchange = e => {
+    try { localStorage.setItem(DASH_SORT_KEY, e.target.value); } catch (err) { /* 存不进不影响本次排序 */ }
+    renderDashList();
+  };
   renderDashList();
 }

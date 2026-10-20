@@ -15,9 +15,12 @@ import threading
 import time
 import traceback
 import uuid
+import zipfile
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import quote
 
 # 免安装包里用的是嵌入式 Python，它按 python313._pth 决定模块搜索路径，
 # 不会像常规 Python 那样自动把「被运行脚本所在目录」加进 sys.path。
@@ -48,6 +51,8 @@ from core.render.html_report import render_report as render_html
 from core.render.markdown import render_markdown
 from core.render.pdf_report import render_pdf
 from core.render.static_chart import render_chart
+from core.render.table_export import MAX_ROWS as EXPORT_MAX_ROWS
+from core.render.table_export import render_table
 from core.convert import convert_docx_to_pdf, convert_pdf_to_docx
 from docx import Document
 from reportlab.platypus import SimpleDocTemplate
@@ -56,11 +61,43 @@ from core.session_store import clear as session_clear
 from core.session_store import remove as session_remove
 from core.spec import parse as parse_spec
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
-WEB_DIR = os.path.join(ROOT, "web")
-OUT_DIR = cfgmod.outputs_dir()
-TEMP_DIR = cfgmod.temp_dir()
-VENDOR_ECHARTS = os.path.join(WEB_DIR, "vendor", "echarts.min.js")
+# 跨请求共享状态（SESSION / REPORTS / 缓存与锁）集中到 core/state.py，
+# 各域路由在 core/routes/ 下。app.py 只留装配、异常处理与根级路由。
+from core.state import (
+    LOG_DIR,
+    MAX_SESSION_DATASETS,
+    MAX_UPLOAD_MB,
+    OUT_DIR,
+    PERSISTED,
+    REPORTS,
+    RESIDUE_TMP_DAYS,
+    ROOT,
+    SESSION,
+    SESSION_TRASH,
+    TEMP_DIR,
+    VENDOR_ECHARTS,
+    WEB_DIR,
+    _HIST_CACHE,
+    _HIST_RESP,
+    _LOCK,
+    _MAX_WORKERS,
+    _STAMP_RE,
+    _available_count,
+    _evict_if_needed,
+    _fallback_grid,
+    _get,
+    _keep,
+    _meta_dict,
+    _reload,
+    _report_key,
+    _resolve,
+    _restore_session,
+    _safe,
+    _session_ids,
+    _session_snapshot,
+    _touch,
+)
+
 os.makedirs(OUT_DIR, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
 
@@ -80,11 +117,10 @@ async def _lifespan(_app: "FastAPI"):
 
 app = FastAPI(title="ReportStudio", lifespan=_lifespan)
 
-LOG_DIR = os.path.join(ROOT, "logs")
-# 会话文件的回收站：core/session_store 删不掉时会用 rename 把文件挪到这里。
-# 提成模块常量而不是在函数里现拼，是为了让测试能把它指向别处，
-# 免得跑一次测试就去动真实的 session_trash/。
-SESSION_TRASH = os.path.join(ROOT, "session_trash")
+# 注册各域路由（db / convert；后续 dashboard、history、generate 等同套路接入）
+from core.routes import register as _register_routes
+_register_routes(app)
+
 
 
 @app.exception_handler(Exception)
@@ -118,93 +154,7 @@ async def _unhandled(request, exc):  # noqa: ANN001
                   f"　—— 完整堆栈已写入 {os.path.join(LOG_DIR, 'error.log')}"},
         status_code=200)
 
-# dataset_id -> {"dataset": Dataset, "grid": list[list]}
-SESSION: dict[str, dict] = {}
-# 输出目录 -> 生成报告所需的一切，供 Word / PDF 导出复用
-REPORTS: dict[str, dict] = {}
 
-# 保护上面两个注册表 + SESSION 的遍历。
-#
-# 为什么需要：这些端点原来是 async def，跑在单线程事件循环里，
-# 遍历 SESSION 时不可能有别的请求插进来。改成同步 def 后由线程池并发执行，
-# 「list_datasets 正在遍历、upload 正在往里塞」就可能同时发生，
-# CPython 会直接抛 RuntimeError: dictionary changed size during iteration。
-#
-# 锁的粒度刻意只包住注册表的读写，**不包住**解析、渲染、SQL 这些重活 ——
-# 否则并发度还是 1，改动就白做了。重活本身不共享状态，可以放心并行。
-_LOCK = threading.RLock()
-
-# 同步端点跑在 anyio 的默认线程池里，默认容量 40。对本地单机工具够用，
-# 但 40 个 /api/generate 同时进来会要了命：每个请求都带着一份 pandas 数据集
-# 和 matplotlib 的字体缓存，上百 MB 一个，40 个就是几个 GB，直接把机器拖进 swapping。
-# 收到 4 个既能让两个请求真正并行（实测两个出图 0.52 倍耗时），
-# 又不会让内存失控。多出来的请求排队等就行，反正它们本来也要等 CPU。
-_MAX_WORKERS = 4
-
-
-def _session_snapshot() -> list[tuple[str, dict]]:
-    """取 SESSION 的快照，供遍历用。
-
-    有了快照，遍历期间别人怎么改 SESSION 都无所谓；
-    加锁只是为了拷贝这一刻的一致性，不为了把遍历全程串行化。
-    """
-    with _LOCK:
-        return list(SESSION.items())
-
-
-def _session_ids() -> list[str]:
-    with _LOCK:
-        return list(SESSION.keys())
-
-
-def _report_key(out_dir: str) -> str:
-    """报告注册表的键：路径统一归一化。
-
-    同一个目录可能被写成 `E:/ReportStudio/outputs\\x` 或 `E:\\ReportStudio\\outputs/x`
-    —— 都指向同一个地方，但作为 dict 键是三个不同的字符串。不归一化的话，
-    调用方只要把分隔符换个写法，导出就会报「这份报告已过期」，很难排查。
-    """
-    return os.path.normcase(os.path.normpath(out_dir))
-
-MAX_UPLOAD_MB = 60
-
-
-def _fallback_grid(ds: Dataset) -> list[list]:
-    """拿不到原始排版时（文档/PDF/图片），用列名+数据行拼一个等价网格。"""
-    grid = [[c.name for c in ds.columns]]
-    for r in ds.rows:
-        grid.append([r.get(c.name) for c in ds.columns])
-    return grid
-
-
-def _keep(datasets: list[tuple]):
-    # 落盘放在锁外：json.dump 大表要几百毫秒，锁内做会把并发请求全堵住。
-    # 先把要写的内容备好，再进锁只做「登记 + 取出引用」。
-    prepared = []
-    for ds, grid in datasets:
-        g = grid if grid is not None else _fallback_grid(ds)
-        prepared.append((ds, g))
-    with _LOCK:
-        for ds, g in prepared:
-            SESSION[ds.id] = {"dataset": ds, "grid": g}
-    if session_store.enabled():
-        for ds, g in prepared:
-            session_store.save(ds, g)
-
-
-def _restore_session() -> int:
-    """启动时把上次会话的数据表读回来，省得重新传一遍文件。"""
-    if not session_store.enabled():
-        return 0
-    n = 0
-    with _LOCK:
-        for ds, grid in session_store.load_all():
-            if ds.id in SESSION:
-                continue
-            SESSION[ds.id] = {"dataset": ds,
-                              "grid": grid if grid is not None else _fallback_grid(ds)}
-            n += 1
-    return n
 
 
 @app.get("/")
@@ -219,7 +169,7 @@ def status():
             "outputs": OUT_DIR, "temp": TEMP_DIR,
             "echarts_local": os.path.exists(VENDOR_ECHARTS),
             "persist": session_store.enabled(),
-            "datasets": len(_session_snapshot()),
+            "datasets": _available_count(),
             # 可回收的残片（*.deleted / 过期 *.tmp / 会话回收站），
             # 界面上据此显示「清理缓存（147 个 / 72 MB）」
             "residue": st["count"], "residue_size": st["size"]}
@@ -295,15 +245,12 @@ def paste(payload: dict):
 def fix(payload: dict):
     """界面上改表头行 / 列类型后重算。"""
     did = payload.get("id")
-    with _LOCK:
-        item = SESSION.get(did)
-        if item is None:
-            raise HTTPException(404, "数据表不存在，请重新导入")
-        # 在锁内把要用到的两个引用都取出来。
-        # build_dataset 要跑几百毫秒，不能占着锁；而等到锁外再取 SESSION[did]，
-        # 期间这张表可能已经被 /api/dataset/{id} 删了 —— 那时拿到的是 None，
-        # 后面 item["grid"] 就是 TypeError，用户看到一句内部异常。
-        grid, old = item["grid"], item["dataset"]
+    item = _get(did)
+    if item is None:
+        raise HTTPException(404, "数据表不存在，请重新导入")
+    # _get 已经把引用取好；下面 build_dataset 要跑几百毫秒，不占锁。
+    # 写回前再确认这张表还在（没被别的请求删掉），避免 TypeError。
+    grid, old = item["grid"], item["dataset"]
     ds = build_dataset(
         grid,
         name=old.name,
@@ -318,14 +265,24 @@ def fix(payload: dict):
         if SESSION.get(did) is item:
             item["dataset"] = ds
     if session_store.enabled():
-        session_store.save(ds, grid)
+        if session_store.save(ds, grid):
+            with _LOCK:
+                PERSISTED.add(did)
     return {"ok": True, "dataset": ds.to_dict()}
 
 
 @app.get("/api/datasets")
 def list_datasets():
-    """当前会话里所有数据表，包括上次会话恢复的那些。"""
-    return {"items": [it["dataset"].to_dict() for _, it in _session_snapshot()]}
+    """所有可用数据表：在内存的重对象直接出，被淘汰但已落盘的用轻量元数据补。"""
+    items = []
+    with _LOCK:
+        for it in SESSION.values():
+            items.append(it["dataset"].to_dict())
+    for did in PERSISTED - set(SESSION.keys()):
+        m = _meta_dict(did)
+        if m is not None:
+            items.append(m)
+    return {"items": items}
 
 
 @app.delete("/api/dataset/{did}")
@@ -333,6 +290,7 @@ def delete_dataset(did: str):
     """移除一张表：内存和磁盘上都清掉。"""
     with _LOCK:
         SESSION.pop(did, None)
+        PERSISTED.discard(did)
     session_remove(did)
     return {"ok": True}
 
@@ -342,6 +300,7 @@ def clear_session():
     with _LOCK:
         n = len(SESSION)
         SESSION.clear()
+        PERSISTED.clear()
     session_clear()
     return {"ok": True, "removed": n}
 
@@ -388,1053 +347,8 @@ def cleanup_now():
             "left": after["count"], "left_size": after["size"]}
 
 
-# ———————————————————————— 数据库取数（只读） ————————————————————————
-# 三重闸门：core/db/guard.py 拦语句、core/db/connect.py 设只读会话、
-# 这里加行数上限与超时。取数结果走 build_dataset 转成 Dataset，
-# 登记进 SESSION 后和导入的 Excel/CSV 完全等价，可直接出图、导出、合并。
 
-@app.get("/api/db/kinds")
-def db_kinds():
-    """界面用：支持哪些数据库、各自要填什么字段。"""
-    from core.db.connect import SPECS
-    return {"ok": True, "readonly": True,
-            "kinds": [{"kind": k, **v} for k, v in SPECS.items()],
-            "limits": cfgmod.db_settings()}
 
-
-@app.get("/api/db/connections")
-def db_list_connections():
-    from core.db import store as dbstore
-    return {"ok": True, "items": dbstore.list_public()}
-
-
-@app.post("/api/db/connections")
-def db_save_connection(payload: dict):
-    from core.db import store as dbstore
-    ok, note, info = dbstore.save(payload)
-    return {"ok": ok, "note": note, "connection": info, "items": dbstore.list_public()}
-
-
-@app.delete("/api/db/connections")
-def db_delete_connection(name: str = ""):
-    from core.db import store as dbstore
-    ok, note = dbstore.delete(name)
-    return {"ok": ok, "note": note, "items": dbstore.list_public()}
-
-
-@app.post("/api/db/test")
-def db_test(payload: dict):
-    """试连。失败也是 ok:false + 白话原因，不抛。
-
-    同步 def：底下是真实网络握手（TCP + 认证），动辄几秒到超时，
-    放事件循环里会把整个服务卡住。
-    """
-    from core.db import store as dbstore
-    from core.db.query import test_connection
-    cfg, err = dbstore.resolve(payload)
-    if cfg is None:
-        return {"ok": False, "error": err}
-    cfg.connect_timeout = cfgmod.db_settings()["connect_timeout"]
-    return test_connection(cfg)
-
-
-@app.post("/api/db/scan")
-def db_scan(payload: dict):
-    """连上并列出可读的表/视图。"""
-    from core.db import store as dbstore
-    from core.db.connect import SPECS, connect
-    from core.db.query import list_tables
-    cfg, err = dbstore.resolve(payload)
-    if cfg is None:
-        return {"ok": False, "error": err}
-    try:
-        conn = connect(cfg, cfgmod.db_settings()["timeout_ms"])
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-    try:
-        tables = list_tables(conn)
-        return {"ok": True, "tables": tables, "kind": cfg.kind,
-                "label": SPECS.get(cfg.kind, {}).get("label", cfg.kind),
-                "source": cfg.describe(),
-                "readonly_enforced": conn.readonly_enforced,
-                "warnings": list(conn.warnings)}
-    except Exception as e:
-        return {"ok": False, "error": f"读表清单失败：{e}"}
-    finally:
-        conn.close()
-
-
-@app.post("/api/db/columns")
-def db_columns(payload: dict):
-    """看某张表的列定义。"""
-    from core.db import store as dbstore
-    from core.db.connect import connect
-    from core.db.query import build_select_template, describe_table
-    cfg, err = dbstore.resolve(payload)
-    if cfg is None:
-        return {"ok": False, "error": err}
-    table = (payload.get("table") or "").strip()
-    schema = (payload.get("schema") or "").strip()
-    if not table:
-        return {"ok": False, "error": "没指定表名"}
-    try:
-        conn = connect(cfg, cfgmod.db_settings()["timeout_ms"])
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-    try:
-        cols = describe_table(conn, table, schema)
-        return {"ok": True, "columns": cols,
-                "suggest_sql": build_select_template(
-                    cfg.kind, table, [c["name"] for c in cols[:12]], schema,
-                    payload.get("limit") or 1000)}
-    except Exception as e:
-        return {"ok": False, "error": f"读列定义失败：{e}"}
-    finally:
-        conn.close()
-
-
-@app.post("/api/db/build_sql")
-def db_build_sql(payload: dict):
-    """按选中的表/列生成一条可直接跑的 SELECT（纯拼串，不需要连库）。"""
-    from core.db.query import build_select_template, preview_sql
-    table = (payload.get("table") or "").strip()
-    if not table:
-        return {"ok": False, "error": "没指定表名"}
-    kind = str(payload.get("kind") or "sqlite").strip().lower()
-    schema = (payload.get("schema") or "").strip()
-    cols = [str(c) for c in (payload.get("columns") or []) if str(c).strip()]
-    limit = payload.get("limit") or 1000
-    sql = (build_select_template(kind, table, cols, schema, limit) if cols
-           else preview_sql(kind, table, schema, limit))
-    return {"ok": True, "sql": sql}
-
-
-@app.post("/api/db/query")
-def db_query(payload: dict):
-    """执行只读 SQL。
-
-    import=true（默认）时把结果登记成一张数据表，之后就能像导入的表格一样
-    配图表、进报告、导出 Word/PDF。import=false 只回预览不落任何数据。
-
-    同步 def：SQL 是阻塞调用（TCP 往返 + 数据库端执行），
-    大结果集一次能跑几十秒，写成 async def 期间整个服务都没响应。
-    """
-    from core.db import store as dbstore
-    from core.db.guard import SQLRejected
-    from core.db.query import run_to_dataset
-
-    sql = (payload.get("sql") or "").strip()
-    if not sql:
-        return {"ok": False, "error": "SQL 是空的，先写一条查询。"}
-
-    cfg, err = dbstore.resolve(payload)
-    if cfg is None:
-        return {"ok": False, "error": err}
-
-    s = cfgmod.db_settings()
-    cfg.connect_timeout = s["connect_timeout"]
-    try:
-        max_rows = int(payload.get("max_rows") or s["max_rows"])
-    except (TypeError, ValueError):
-        max_rows = s["max_rows"]
-    max_rows = max(1, min(max_rows, s["max_rows"]))
-
-    try:
-        ds, grid, meta = run_to_dataset(
-            cfg, sql, name=(payload.get("name") or "").strip(),
-            max_rows=max_rows, timeout_ms=s["timeout_ms"])
-    except SQLRejected as e:
-        return {"ok": False, "blocked": True, "error": e.message}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-    x_cols = [c.name for c in ds.columns if c.dtype in ("text", "date")]
-    num_cols = [c for c in ds.columns if c.dtype == "number"]
-    # 百分比/率类列不放进默认图表：它和金额往往差好几个数量级，
-    # 放在同一根轴上柱子会被压得看不见，反而让人以为图错了。
-    plain_num = [c.name for c in num_cols if c.unit != "%"]
-    y_cols = plain_num or [c.name for c in num_cols]
-    # 默认只配一个数列：销售额和订单量量级也常常差很远，两条一起画同样难读。
-    # 其余的列在 y_candidates 里，用户想加随时能加。
-    suggest = ([{"type": "bar", "x": x_cols[0], "y": y_cols[:1], "agg": "sum",
-                 "sort_by": "__x__", "sort_order": "desc"}]
-               if x_cols and y_cols else [])
-
-    resp = {
-        "ok": True,
-        "source": meta["source"],
-        "elapsed_ms": meta["elapsed_ms"],
-        "truncated": meta["truncated"],
-        "row_count": meta["row_count"],
-        "readonly_enforced": meta["readonly_enforced"],
-        "columns_detail": [c.to_dict() for c in ds.columns],
-        "preview_rows": ds.rows[:200],
-        "warnings": ds.warnings,
-        # 顺手给出「这张图怎么配」的建议，前端可一键预填，
-        # 省掉为了拿建议再跑一遍同样的查询
-        "x_candidates": x_cols,
-        "y_candidates": y_cols,
-        "suggest_charts": suggest,
-    }
-    if payload.get("import", True):
-        _keep([(ds, grid)])
-        resp["dataset"] = ds.to_dict()
-        resp["imported"] = True
-    else:
-        resp["imported"] = False
-    return resp
-
-
-@app.post("/api/db/upload")
-def db_upload(file: UploadFile = File(...)):
-    """上传一个 SQLite 库文件，返回可直接用的 path（省得手敲路径）。
-
-    同步 def（配合 f.file.read 分块读，跟 /api/upload 同一个理由）：
-    库文件上限 2 GB，一次性 await file.read() 会把整个文件塞进内存。
-    """
-    name = file.filename or "uploaded.db"
-    ext = os.path.splitext(name)[1].lower()
-    if ext not in (".db", ".sqlite", ".sqlite3", ".db3"):
-        return {"ok": False, "error": f"只接受 SQLite 库文件（.db/.sqlite/.sqlite3/.db3），"
-                                     f"这个是 {ext or '无扩展名'}"}
-    cap = MAX_UPLOAD_MB * 1024 * 1024 * 10
-    buf = bytearray()
-    while True:
-        chunk = file.file.read(4 * 1024 * 1024)
-        if not chunk:
-            break
-        buf += chunk
-        if len(buf) > cap:
-            return {"ok": False, "error": "库文件太大（上限 2 GB）"}
-    content = bytes(buf)
-    sub = os.path.join(TEMP_DIR, "db", uuid.uuid4().hex[:8])
-    os.makedirs(sub, exist_ok=True)
-    path = os.path.join(sub, _safe(name) or "uploaded.db")
-    with open(path, "wb") as fp:
-        fp.write(content)
-    # 校验文件头，避免把随便一个文件当库去连（那样报错很难懂）
-    try:
-        with open(path, "rb") as fp:
-            head = fp.read(16)
-        if not head.startswith(b"SQLite format 3"):
-            return {"ok": False, "error": "这个文件不是有效的 SQLite 数据库（文件头不对）。"
-                                         "如果它是别的数据库的备份，请改用对应的连接方式。"}
-    except Exception:
-        pass
-    return {"ok": True, "path": path, "name": name, "size": len(content)}
-
-
-@app.post("/api/plan")
-def plan(payload: dict):
-    datasets = _resolve(payload.get("dataset_ids") or [])
-    from core.merge import suggest_plan
-    return suggest_plan(datasets)
-
-
-@app.post("/api/parse_nl")
-def parse_nl(payload: dict):
-    datasets = _resolve([payload.get("dataset_id")])
-    if not datasets:
-        raise HTTPException(404, "数据表不存在")
-    ds = datasets[0]
-    spec, source = parse_spec((payload.get("text") or "").strip(), ds)
-    if not spec.charts:
-        return {"ok": False, "error": "没能理解这句话，请在下方手动选择"}
-    return {"ok": True, "source": source, "spec": {
-        "title": spec.title,
-        "charts": [c.to_dict() for c in spec.charts],
-        "metrics": spec.metrics,
-    }}
-
-
-@app.post("/api/generate")
-def generate(payload: dict):
-    """生成报告。
-
-    同步 def：这里面有 pandas 聚合、matplotlib 出图、HTML/Markdown 渲染，
-    实测一张多图报告要跑 2~8 秒。外加 polish_summary 会发一次 LLM 请求
-    （配了模型才发，没配直接跳过）。写成 async def 时这些全部占着事件循环，
-    期间 /api/status、静态资源、看板全都超时 —— 界面表现为「整个卡死」。
-
-    改成同步 def 后由线程池执行，重活期间事件循环空着，
-    轻量接口照常几十毫秒返回。
-    """
-    want_ids = payload.get("dataset_ids") or []
-    datasets = _resolve(want_ids)
-    if not datasets:
-        # 两种「拿不到数据」要分开说。以前一律回「请先导入数据」，
-        # 但还有第三种情况：表是在这个请求发出之后、跑到这里之前被别人删掉的
-        # （界面上删表、另一个标签页删表、或者上一步刚生成的报告目录被清理）。
-        # 这时让用户去「导入数据」是误导 —— 他明明导入过。
-        alive = _session_ids()
-        if want_ids and not any(i in alive for i in want_ids):
-            missing = [i for i in want_ids if i not in alive]
-            raise HTTPException(
-                404, f"选中的 {len(missing)} 张数据表已经不在了"
-                     f"（可能刚被删除）。请重新选择要用的数据表。")
-        raise HTTPException(400, "请先导入数据")
-
-    mode = payload.get("merge_mode") or "merge"
-    if mode == "merge" and len(datasets) > 1:
-        groups = group_datasets(datasets)
-        datasets = [merge_group(g) for g in groups]
-
-    # charts 里的元素必须是 dict，否则下面 c.items() 直接抛 AttributeError，
-    # 界面上就变成「服务端出错（AttributeError）」—— 用户看到的应该是
-    # 「配置不合法」，而不是一段内部异常。实测：charts:["柱状图"] 会走到这条路径。
-    raw_charts = payload.get("charts") or []
-    if not isinstance(raw_charts, list):
-        raise HTTPException(400, "图表配置格式不对，应为数组")
-    # 顺手滤掉非 dict：前端永远传 dict，这里只挡手工调用 / 旧版前端，
-    # 滤掉后剩下的逻辑照旧降级成「数据摘要报告」，不会打断出报告。
-    raw_charts = [c for c in raw_charts if isinstance(c, dict)]
-    charts = [ChartSpec(**{k: v for k, v in c.items()
-                           if k in ChartSpec.__dataclass_fields__})
-              for c in raw_charts]
-    charts = [c for c in charts if c.x and c.y]
-    # 不在这里直接报错：没有可出图的配置时，下面会降级成「数据摘要报告」，
-    # 保证「只有纯文本 / 只有无模型图片 / 表里没有数值列」这类来源也一定能拿到报告。
-    requested_charts = len(charts)
-
-    # 明细表排序：默认空串 = 保持原始顺序（不强制排序）。
-    # 来自用户的「明细按销售额降序」这类要求在这里落地，四个渲染器都读它。
-    detail_by = (payload.get("detail_sort_by") or "").strip()
-    detail_order = (payload.get("detail_sort_order") or "asc").strip().lower()
-    if detail_order not in ("asc", "desc"):
-        detail_order = "asc"
-
-    spec = ReportSpec(
-        title=(payload.get("title") or "数据分析报告").strip(),
-        template=payload.get("template") or "full",
-        dataset_ids=[d.id for d in datasets],
-        charts=charts,
-        metrics=payload.get("metrics") or [],
-        chart_layout=layout_columns(payload.get("chart_layout")),
-        detail_sort_by=detail_by,
-        detail_sort_order=detail_order,
-    )
-
-    # 图块构造统一走 core/chartset，和看板共用同一套口径（含「多指标拆成多张图」）
-    chart_blocks, pending = build_blocks(datasets, charts)
-    # 文本类数据自动补「主题分布」图：聚类打标 → 各主题条数柱状图（走同一套 build_blocks）
-    for ds in datasets:
-        res = build_topic_chart(ds)
-        if res:
-            tb, tp = build_blocks([res[0]], [res[1]])
-            chart_blocks += tb
-            pending += tp
-    agg_store = {it["id"]: it for it in pending}
-    chart_images: dict[str, str] = {}
-
-    # 没有任何可绘制的图时，不报错——降级出「数据摘要报告」（结论 + 指标 + 数据明细仍完整）
-    degrade_note = ""
-    if not chart_blocks:
-        if requested_charts:
-            degrade_note = ("按当前配置没有算出可绘制的数据（横轴或数值列可能对不上），"
-                            "已改为生成「数据摘要报告」——关键数据与明细表仍然完整。")
-        else:
-            degrade_note = ("这份内容里没有可用于出图的横轴与数值列"
-                            "（例如纯文本、扫描图片、或表里没有数值列），"
-                            "已改为生成「数据摘要报告」——关键数据与明细表仍然完整。")
-
-    metric_cards = []
-    excl_summary = all(getattr(c, "exclude_summary", True) for c in charts)
-    for ds in datasets:
-        want = [m for m in spec.metrics
-                if m in numeric_columns(ds)] or numeric_columns(ds)[:4]
-        cards = compute_metrics(ds, want, excl_summary)
-        if len(datasets) > 1:
-            for c in cards:
-                c["title"] = f"{c['title']}（{ds.name[:14]}）"
-        metric_cards += cards
-
-    summary_lines = []
-    for ds in datasets:
-        s = template_summary(ds, spec.charts, metric_cards)
-        summary_lines.append(f"【{ds.name}】{s}" if len(datasets) > 1 else s)
-    summary = "".join(summary_lines)
-    polished = polish_summary(summary)
-    summary = polished or summary
-    if degrade_note:
-        # 降级说明放在最前面，四种导出格式都会带出，用户一眼能看懂为什么没有图
-        summary = degrade_note + summary
-
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe = re.sub(r'[\\/:*?"<>|]+', "_", spec.title)[:40] or "report"
-    # 测试模式下目录名固定：no500 一次跑要出十几份报告，名字都带秒级时间戳的话
-    # 每次跑都新开一批目录，temp/ 会一直涨（实测积到 1.1GB）。固定名字后
-    # 后续跑会直接覆盖同名目录，占用天然有界。正常出报告不受影响。
-    if os.environ.get("RS_FUZZ_OUT"):
-        out_dir = os.path.join(OUT_DIR, "fuzz")
-    else:
-        out_dir = os.path.join(OUT_DIR, f"{safe}_{stamp}")
-    os.makedirs(out_dir, exist_ok=True)
-
-    img_dir = os.path.join(out_dir, "charts")
-    for cid, item in agg_store.items():
-        p = render_chart(item["agg"], item["spec"],
-                         os.path.join(img_dir, cid + ".png"))
-        if p:
-            chart_images[cid] = p
-
-    html_path = render_html(datasets, spec, chart_blocks, metric_cards,
-                            summary, out_dir, VENDOR_ECHARTS)
-    md_path = render_markdown(datasets, spec, chart_blocks, metric_cards,
-                              summary, out_dir)
-
-    # 报告摘要落在报告目录里，供「历史报告」列表显示。
-    # 为什么不留到读的时候现算：列表要显示「几张图 / 几个指标 / 多少行」，
-    # 而这些东西在生成完之后只看目录是推不出来的（charts/ 里数 PNG 不等于图数，
-    # 「多指标拆图」会把一张配置拆成多张）。生成时顺手写下来最省事也最准。
-    # 读不到 meta.json 的老报告由 history() 兜底，不会因此消失。
-    try:
-        meta = {
-            "title": spec.title,
-            "charts": len(chart_blocks),
-            "metrics": len(metric_cards),
-            "degraded": bool(degrade_note),
-            "created": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "datasets": [{"name": d.name, "rows": d.total_rows,
-                          "cols": len(d.columns)} for d in datasets],
-        }
-        with open(os.path.join(out_dir, "meta.json"), "w", encoding="utf-8") as f:
-            json.dump(meta, f, ensure_ascii=False, indent=1)
-    except Exception:
-        pass          # 摘要写不进去不影响报告本身，列表退化成「只有文件名」
-
-    rel = os.path.relpath(out_dir, ROOT).replace("\\", "/")
-    with _LOCK:
-        REPORTS[_report_key(out_dir)] = {"datasets": datasets, "spec": spec,
-                                         "chart_blocks": chart_blocks,
-                                         "metric_cards": metric_cards,
-                                         "summary": summary,
-                                         "chart_images": chart_images}
-    return {
-        "ok": True,
-        "report_url": f"/{rel}/report.html",
-        "md_url": f"/{rel}/report.md",
-        "dir": os.path.normpath(out_dir),
-        "charts": len(chart_blocks),
-        "metrics": len(metric_cards),
-        "degraded": bool(degrade_note),
-        "note": degrade_note.strip(),
-        "summary": summary[:400],
-    }
-
-
-@app.get("/api/dashboards")
-def dashboards_list():
-    """已保存的看板清单。"""
-    return {"items": dash.list_all()}
-
-
-@app.post("/api/dashboard/save")
-def dashboard_save(payload: dict):
-    """保存看板配置并立刻渲染一份。
-
-    存的是「要哪几个指标、哪几张图、怎么排」，不是算好的数字 ——
-    以后每次打开都按当前数据重算，所以看板永远是新的。
-    """
-    did = (payload.get("id") or "").strip()
-    base = dash.get(did) if did else None
-    if did and base is None:
-        return {"ok": False, "error": f"没找到看板「{did}」，可能已被删除。"}
-    cfg = dash.from_payload(payload, base)
-    if not cfg.charts and not cfg.metrics:
-        return {"ok": False, "error": "看板是空的：至少配一张图，或勾一个关键指标。"}
-    cfg = dash.save(cfg)
-    stat = _dashboard_render(cfg)
-    return {"ok": True, "id": cfg.id, "name": cfg.name, **stat}
-
-
-@app.post("/api/dashboard/render")
-def dashboard_render(payload: dict):
-    """按当前数据重新渲染一个看板。"""
-    did = (payload.get("id") or "").strip()
-    cfg = dash.get(did)
-    if cfg is None:
-        return {"ok": False, "error": "没找到这个看板，可能已被删除。"}
-    stat = _dashboard_render(cfg)
-    return {"ok": True, "id": cfg.id, "name": cfg.name, **stat}
-
-
-@app.post("/api/dashboard/preview")
-def dashboard_preview(payload: dict):
-    """按当前配置即时渲染看板，但**不存成常驻看板**。
-
-    报告和看板现在是同一屏里的两个视图：改完图表配置点生成报告，
-    切到看板就该看到最新结果，而不是被迫先「保存到看板」再看一遍。
-    想长期留着，再点「保存到看板」即可。
-    """
-    cfg = dash.from_payload(payload)
-    if not cfg.charts and not cfg.metrics:
-        return {"ok": False,
-                "error": "看板还是空的：先在「说清需求」里配一张图，或在「指标列」里勾一个指标。"}
-    if not cfg.dataset_ids:
-        cfg.dataset_ids = _session_ids()
-    datasets, missing = dash.resolve_datasets(cfg, dict(_session_snapshot()))
-    if not datasets:
-        return {"ok": False,
-                "error": "当前会话里没有数据表，先在左边导入文件或用 SQL 取数。"}
-    stat = dash.render_preview(datasets, cfg, VENDOR_ECHARTS, missing)
-    stat["missing"] = list(missing)
-    return {"ok": True, "name": cfg.name, **stat}
-
-
-@app.delete("/api/dashboard/{did}")
-def dashboard_delete(did: str):
-    ok = dash.delete(did)
-    return {"ok": ok, "error": "" if ok else "没找到这个看板。"}
-
-
-@app.post("/api/dashboard/resize")
-def dashboard_resize(payload: dict):
-    """记录用户在看板里拖出来的每张图尺寸（宽度 span / 高度 px）。
-
-    为什么单独一个接口而不是塞进 save：拖动是高频的、且只动尺寸不动图表配置，
-    混进 save 会让「保存看板」带上一堆无关字段、还容易和正在编辑的配置打架。
-    这里只增量更新 cfg.sizes（按 block_id 对齐），再重新渲染那份 HTML，
-    下回打开看板尺寸还在。
-    """
-    did = (payload.get("id") or "").strip()
-    cfg = dash.get(did)
-    if cfg is None:
-        return {"ok": False, "error": "没找到这个看板，可能已被删除。"}
-    sizes = payload.get("sizes") or {}
-    if not isinstance(sizes, dict):
-        return {"ok": False, "error": "sizes 格式不对。"}
-    cleaned: dict = {}
-    for k, v in sizes.items():
-        if not isinstance(v, dict):
-            continue
-        span = v.get("span")
-        height = v.get("height")
-        try:
-            span = int(span) if span else None
-            height = int(height) if height else None
-        except (TypeError, ValueError):
-            continue
-        if span is not None or height is not None:
-            cleaned[k] = {"span": span, "height": height}
-    if not cleaned:
-        return {"ok": True, "id": did, "note": "没有可更新的尺寸"}
-    cfg.sizes.update(cleaned)
-    dash.save(cfg)
-    # 重新渲染：让落盘的 HTML 也带上新尺寸（否则下次打开会回弹到旧大小）
-    stat = _dashboard_render(cfg)
-    return {"ok": True, "id": did, **stat}
-
-
-def _dashboard_render(cfg) -> dict:
-    """渲染看板并把「哪几张表没了」如实带回去。"""
-    datasets, missing = dash.resolve_datasets(cfg, dict(_session_snapshot()))
-    names_for_missing = list(missing)
-    stat = dash.render_to_file(datasets, cfg, VENDOR_ECHARTS, missing)
-    stat["missing"] = names_for_missing
-    stat["updated"] = cfg.updated
-    if not datasets:
-        stat["warning"] = ("这个看板引用的数据表都不在当前会话里，"
-                           "已渲染成空看板。请把数据重新导入后再刷新。")
-    return stat
-
-
-def _read_meta(d: str) -> dict:
-    """读报告目录里的 meta.json（生成时写的摘要）。老报告没有这个文件，返回空 dict。"""
-    p = os.path.join(d, "meta.json")
-    if not os.path.exists(p):
-        return {}
-    try:
-        with open(p, "r", encoding="utf-8") as f:
-            m = json.load(f)
-        return m if isinstance(m, dict) else {}
-    except Exception:
-        return {}
-
-
-def _dir_size(d: str) -> int:
-    """目录总占用（含 charts/ 里的 PNG）——历史列表里让人一眼看出哪份报告最占地方。"""
-    total = 0
-    try:
-        for root, _dirs, files in os.walk(d):
-            for fn in files:
-                try:
-                    total += os.path.getsize(os.path.join(root, fn))
-                except OSError:
-                    continue
-    except Exception:
-        pass
-    return total
-
-
-def _rm_file(path: str) -> bool:
-    """删单个文件。受限环境里 os.remove 可能被守卫拦下，退化成改名成 *.deleted。"""
-    try:
-        os.remove(path)
-        return True
-    except BaseException:
-        try:
-            os.rename(path, path + ".deleted")
-            return True
-        except BaseException:
-            return False
-
-
-def _rm_dir(path: str) -> bool:
-    """删掉一个报告目录（含里面的图表 PNG）。
-
-    受限环境里 shutil.rmtree 会被批量删除守卫直接拦下，所以准备了三层降级：
-    整体删 → 逐个文件删再删空目录 → 整目录改名成 *.deleted。
-    最后一层至少能让它从列表里消失，目录本体由启动时的 cleanup_residue 回收。
-
-    异常不再静默吞掉，全部打进日志：如果失败是环境级的（沙箱 / 安全软件的
-    批量删除守卫），日志里一眼可辨；吞掉的话只剩「可能正被占用」，
-    谁也排查不了。实测就有过：服务在受限会话里启动，删一份 30 张图的报告
-    被守卫拦了 30 次，日志里全是拦截记录。
-    """
-    import logging
-    log = logging.getLogger("rs.rmdir")
-    try:
-        shutil.rmtree(path)
-        return True
-    except BaseException as e:
-        log.warning("rmtree %s 失败: %r", path, e)
-    try:
-        for root, dirs, files in os.walk(path, topdown=False):
-            for fn in files:
-                try:
-                    os.remove(os.path.join(root, fn))
-                except BaseException as e:
-                    log.warning("remove %s 失败: %r", os.path.join(root, fn), e)
-            for dn in dirs:
-                try:
-                    os.rmdir(os.path.join(root, dn))
-                except BaseException as e:
-                    log.warning("rmdir %s 失败: %r", os.path.join(root, dn), e)
-        os.rmdir(path)
-        return True
-    except BaseException as e:
-        log.warning("逐个删 %s 仍失败: %r", path, e)
-    try:
-        os.rename(path, path + ".deleted")
-        return True
-    except BaseException as e:
-        log.warning("改名 %s 也失败: %r", path, e)
-        return False
-
-
-def _split_stamp(name: str) -> tuple[str, str]:
-    """把 `报告名_20260923_223838` 拆成 ("报告名", "09-23 22:38")。
-
-    不能用 `rsplit("_", 1)`：目录名的时间戳格式是 %Y%m%d_%H%M%S，**自己就带下划线**，
-    只切最后一段的话，日期会剩在名字里（列表显示成「销售分析_20260923」），
-    时间则只剩一个「223838」——连是哪一天都看不出来。
-    """
-    m = re.match(r"^(.*)_(\d{8})_(\d{6})$", name)
-    if not m:
-        return name, ""
-    try:
-        dt = datetime.strptime(m.group(2) + m.group(3), "%Y%m%d%H%M%S")
-        return m.group(1), dt.strftime("%m-%d %H:%M")
-    except ValueError:
-        return m.group(1), f"{m.group(2)} {m.group(3)}"
-
-
-# ——— 历史报告列表的缓存 ———
-# 为什么需要：1640 份报告时 /api/history 全扫要 240ms——每个目录 4 次 stat
-# （report.html/md/docx/pdf 存在性）+ 列出的 50 个目录各一次全目录 walk 算体积。
-# 这些信息在报告生成后基本不变，按目录 mtime 缓存后重复请求只剩
-# listdir + 每目录一次 getmtime。
-# mtime 的精度够用：报告目录里唯一会发生的后续写入是导出 docx/pdf，
-# 新增文件会更新目录 mtime，缓存自动失效重建。
-_HIST_CACHE: dict[str, dict] = {}     # 目录名 -> {"mtime": float, "entry": dict}
-
-# 整包响应缓存：outputs 目录清单的指纹（报告数 + 各目录 mtime 之和）不变，
-# 说明既没有报告增删、也没有哪份报告被重新生成（重生会写文件、推高子目录
-# mtime），这时整个 /api/history 响应可以直接复用，连每目录一次的 stat 都省掉。
-# scandir 在 Windows 上枚举目录时自带 mtime，取指纹本身不再额外发系统调用。
-_HIST_RESP: dict = {"fp": None, "hits": {}}
-
-
-def _outputs_fp() -> tuple:
-    count, msum = 0, 0.0
-    try:
-        with os.scandir(OUT_DIR) as it:
-            for e in it:
-                if e.name.endswith((".deleted", ".tmp")) or not e.is_dir():
-                    continue
-                count += 1
-                msum += e.stat().st_mtime
-    except OSError:
-        pass
-    return (count, round(msum, 2))
-
-
-def _history_entry(name: str, d: str) -> dict | None:
-    """构建（或取缓存的）一个报告目录的列表条目。不是报告返回 None。"""
-    try:
-        mtime = os.path.getmtime(d)
-    except OSError:
-        return None
-    with _LOCK:
-        c = _HIST_CACHE.get(name)
-        if c and c["mtime"] == mtime:
-            return c["entry"]
-    # 构建部分（stat + walk）在锁外跑，别堵住别的请求
-    files = {}
-    for fn in ("report.html", "report.md", "report.docx", "report.pdf"):
-        p = os.path.join(d, fn)
-        if os.path.exists(p):
-            files[fn] = {"size": os.path.getsize(p),
-                         "mtime": datetime.fromtimestamp(
-                             os.path.getmtime(p)).strftime("%m-%d %H:%M")}
-    # 没有 report.* 的目录不算报告（例如导出数据表用的 _exports）
-    if not files:
-        return None
-    rname, stamp = _split_stamp(name)
-    rel = os.path.relpath(d, ROOT).replace("\\", "/")
-    entry = {
-        "dir": d,
-        "name": rname,
-        "stamp": stamp,
-        "files": {k: {"url": f"/{rel}/{k}", **v} for k, v in files.items()},
-        "meta": _read_meta(d),
-        "size": _dir_size(d),
-    }
-    with _LOCK:
-        _HIST_CACHE[name] = {"mtime": mtime, "entry": entry}
-    return entry
-
-
-def _hist_cache_drop(name: str) -> None:
-    with _LOCK:
-        _HIST_CACHE.pop(name, None)
-        _HIST_RESP["fp"] = None      # 有条目失效，整包缓存一并作废
-
-
-@app.get("/api/history")
-def history(q: str = "", limit: int = 50):
-    """列出 outputs 下已有的报告，可以回看、重新导出、删除。
-
-    q 走服务端过滤，不做前端本地筛：报告攒到几百份以后只回传前 N 条，
-    前端再筛就筛不全 —— 用户搜一个明明存在的名字却查不到，最难解释。
-    """
-    if not os.path.isdir(OUT_DIR):
-        return {"items": [], "total": 0, "filtered": False}
-    kw = (q or "").strip().lower()
-    try:
-        limit = max(1, min(int(limit or 50), 300))
-    except (TypeError, ValueError):
-        limit = 50
-
-    fp = _outputs_fp()
-    with _LOCK:
-        if _HIST_RESP["fp"] == fp:
-            hit = _HIST_RESP["hits"].get((kw, limit))
-            if hit is not None:
-                return hit
-        else:
-            _HIST_RESP["fp"] = fp
-            _HIST_RESP["hits"] = {}
-
-    items, matched = [], 0
-    # grand_* 是「outputs 里全部报告」的份数和体积，不受 q 过滤影响——
-    # 前端要在搜索时也显示「共 1640 份 · 1.8 GB」，不然用户搜的时候
-    # 看不出来存量到底有多大，也就想不到去清理。
-    grand_total = grand_size = 0
-    for name in sorted(os.listdir(OUT_DIR), reverse=True):
-        # *.deleted / *.tmp 是删除或写入被中断后的残片，不该被当成报告列出来
-        if name.endswith(".deleted") or name.endswith(".tmp"):
-            continue
-        d = os.path.join(OUT_DIR, name)
-        if not os.path.isdir(d):
-            continue
-        entry = _history_entry(name, d)
-        if entry is None:
-            # 目录还在但已经不是报告了（或刚被删）——顺手把陈旧缓存清掉
-            _hist_cache_drop(name)
-            continue
-        grand_total += 1
-        grand_size += entry.get("size", 0)
-        if kw and kw not in name.lower() and kw not in entry["name"].lower():
-            continue
-        matched += 1
-        if len(items) >= limit:
-            continue          # 已经够了，但继续数 matched，好让前端说「共 N 份」
-        items.append(entry)
-    resp = {"items": items, "total": matched, "filtered": bool(kw),
-            "grand_total": grand_total, "grand_size": grand_size}
-    with _LOCK:
-        # 指纹在构建期间又变了（有报告增删）就不落缓存，宁缺毋滥
-        if _HIST_RESP["fp"] == fp:
-            _HIST_RESP["hits"][(kw, limit)] = resp
-    return resp
-
-
-@app.delete("/api/history")
-def history_delete(dir: str = ""):
-    """删掉一份报告（整个目录，含 charts 里的图）。
-
-    路径是前端传上来的字符串，必须校验它**正好落在 OUT_DIR 的下一层** ——
-    否则这就等于给了一个「删任意目录」的接口，一个 `../../` 就能出事。
-    """
-    if not dir:
-        return {"ok": False, "error": "没指定要删的报告"}
-    root = os.path.normcase(os.path.normpath(os.path.abspath(OUT_DIR)))
-    target = os.path.normcase(os.path.normpath(os.path.abspath(dir)))
-    # 必须**正好**是 OUT_DIR 的下一层：dirname 相等挡住 `../../`；
-    # target == root 那一半挡住「把 outputs 整个删掉」——只比 dirname 的话，
-    # 传输出目录本身时 dirname(OUT) 恰好等于 root，会被放行，
-    # 一删就是所有报告一起没。
-    if target == root or os.path.dirname(target) != root:
-        return {"ok": False, "error": "这个路径不是一份报告，拒绝删除"}
-    if not os.path.isdir(target):
-        return {"ok": False, "error": "这份报告已经不在了"}
-    with _LOCK:
-        REPORTS.pop(_report_key(dir), None)   # 顺手清掉导出用的注册表，免得占内存
-        _HIST_CACHE.pop(os.path.basename(target), None)   # 列表缓存同步清
-    ok = _rm_dir(target)
-    return {"ok": ok,
-            "error": "" if ok else "删除失败（目录可能正被占用：关掉预览它的窗口再试）"}
-
-
-@app.post("/api/history/delete")
-def history_delete_post(payload: dict):
-    """POST 别名：DELETE 方法会被部分代理 / 预览转发层拦下（405 或不转发）。
-    前端统一走这个入口，逻辑与 DELETE /api/history 完全一致。"""
-    return history_delete(str(payload.get("dir") or ""))
-
-
-_STAMP_RE = re.compile(r"^(.*)_(\d{8})_(\d{6})$")
-
-
-@app.post("/api/history/cleanup")
-def history_cleanup(payload: dict):
-    """按天数批量清理旧报告。
-
-    两步走：apply=False 只统计不删，前端拿这个数弹确认框；
-    apply=True 才真删。删报告不可逆，必须让用户在看到
-    「将删 N 份 · X GB」之后自己点头，不能一个按钮直接删。
-
-    安全线：
-    - days 下限 7 天——低于这个误删刚生成的报告的风险，比省下的空间值钱；
-    - 只碰目录名带标准时间戳的目录，没有时间戳的（老格式 / 手动建的）一律不动，
-      宁可留着也不能误删；
-    - 60 秒时间预算：存量上千份时全删完可能要几分钟，超预算就停，
-      把没处理到的留在 left 里让用户再点一次。
-    """
-    try:
-        days = int(payload.get("days") or 0)
-    except (TypeError, ValueError):
-        return {"ok": False, "error": "天数得是个数字"}
-    if days < 7:
-        return {"ok": False, "error": "最少保留 7 天——时间太近的报告不该被批量清掉"}
-    apply = bool(payload.get("apply"))
-    cut = datetime.now() - timedelta(days=days)
-    if not os.path.isdir(OUT_DIR):
-        return {"ok": True, "removed": 0, "freed": 0, "left": 0}
-
-    removed = freed = 0
-    left = 0
-    deadline = time.monotonic() + 60.0
-    for name in os.listdir(OUT_DIR):
-        if name.endswith(".deleted") or name.endswith(".tmp"):
-            continue
-        d = os.path.join(OUT_DIR, name)
-        if not os.path.isdir(d):
-            continue
-        m = _STAMP_RE.match(name)
-        if not m:
-            continue
-        try:
-            dt = datetime.strptime(m.group(2) + m.group(3), "%Y%m%d%H%M%S")
-        except ValueError:
-            continue
-        if dt >= cut:
-            continue
-        if time.monotonic() > deadline:
-            left += 1        # 预算用光，剩下的这轮不碰
-            continue
-        size = _dir_size(d)
-        if not apply:
-            removed += 1
-            freed += size
-            continue
-        if _rm_dir(d):
-            removed += 1
-            freed += size
-            with _LOCK:
-                _HIST_CACHE.pop(name, None)
-                REPORTS.pop(_report_key(d), None)
-        else:
-            left += 1
-    return {"ok": True, "removed": removed, "freed": freed, "left": left}
-
-
-@app.post("/api/export_dataset")
-def export_dataset(payload: dict):
-    """把会话里（可能刚在界面上修正过）的数据表导出成 CSV / Excel。
-
-    补上「导入 → 改表头行 / 改列类型 / 剔合计行 → **导出**」这条闭环里断掉的最后一环：
-    以前这些修正只能用来画图，拿不回去。
-    """
-    kind = str(payload.get("kind") or "csv").lower()
-    if kind not in ("csv", "xlsx"):
-        return {"ok": False, "error": "只支持 csv / xlsx"}
-    did = payload.get("id")
-    with _LOCK:
-        item = SESSION.get(did)
-    if not item:
-        return {"ok": False, "error": "数据表不在当前会话里，请重新导入"}
-    ds = item["dataset"]
-    if not ds.columns:
-        return {"ok": False, "error": "这张表没有列，导不出东西"}
-
-    out_dir = os.path.join(OUT_DIR, "_exports")
-    os.makedirs(out_dir, exist_ok=True)
-    _sweep_exports(out_dir)
-
-    base = _safe(ds.name) or "dataset"
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = os.path.join(out_dir, f"{base}_{stamp}.{'csv' if kind == 'csv' else 'xlsx'}")
-    headers = [c.name for c in ds.columns]
-    try:
-        if kind == "csv":
-            import csv
-            # utf-8-sig（带 BOM）是刻意的：不带 BOM 的 UTF-8 CSV 用 Excel
-            # 双击打开会把中文显示成乱码，用户第一反应是「导出坏了」。
-            with open(path, "w", encoding="utf-8-sig", newline="") as f:
-                w = csv.writer(f)
-                w.writerow(headers)
-                for r in ds.rows:
-                    w.writerow(["" if r.get(h) is None else r.get(h) for h in headers])
-        else:
-            from openpyxl import Workbook
-            wb = Workbook()
-            ws = wb.active
-            ws.title = (base or "data")[:31]
-            ws.append(headers)
-            for r in ds.rows:
-                ws.append([r.get(h) for h in headers])
-            wb.save(path)
-    except Exception as e:
-        return {"ok": False, "error": f"导出失败：{type(e).__name__}: {e}"}
-
-    rel = os.path.relpath(path, ROOT).replace("\\", "/")
-    return {"ok": True, "url": f"/{rel}", "path": path,
-            "rows": len(ds.rows), "cols": len(headers)}
-
-
-def _sweep_exports(d: str, max_age_days: int = 7, limit: int = 10) -> None:
-    """回收过期的数据表导出文件。限量删除，避免撞上批量删除守卫。"""
-    cutoff = time.time() - max_age_days * 86400
-    n = 0
-    try:
-        for fn in os.listdir(d):
-            if n >= limit:
-                break
-            if fn.endswith(".deleted"):
-                continue          # 上一次删除留下的残片，交给 cleanup_residue 统一回收
-            p = os.path.join(d, fn)
-            try:
-                if os.path.isfile(p) and os.path.getmtime(p) < cutoff:
-                    _rm_file(p)
-                    n += 1
-            except BaseException:
-                continue
-    except BaseException:
-        pass
-
-
-@app.post("/api/export")
-def export(payload: dict):
-    """导出 Word / PDF / 拼图。
-
-    同步 def：python-docx、reportlab 都是纯 CPU + 同步 I/O，
-    PDF 还要经过一次浏览器内核渲染，实测 1~5 秒。
-    """
-    kind = payload.get("kind")
-    if kind not in ("docx", "pdf", "png", "xlsx"):
-        raise HTTPException(400, "只支持 docx / pdf / png / xlsx")
-    out_dir = payload.get("dir")
-    if not out_dir or not os.path.isdir(out_dir):
-        raise HTTPException(404, "报告目录不存在，请重新生成")
-    with _LOCK:
-        sub = REPORTS.get(_report_key(out_dir))
-    if not sub:
-        raise HTTPException(404, "这份报告已过期，请重新生成后再导出")
-
-    chart_images = sub["chart_images"]
-    if not chart_images:
-        img_dir = os.path.join(out_dir, "charts")
-        chart_images = {b["id"]: os.path.join(img_dir, b["id"] + ".png")
-                        for b in sub["chart_blocks"]}
-        chart_images = {k: v for k, v in chart_images.items() if os.path.exists(v)}
-
-    try:
-        if kind == "png":
-            # 拼成一张总图。顺序必须跟报告里一致，否则图文对不上。
-            paths = [chart_images[b["id"]] for b in sub["chart_blocks"]
-                     if b["id"] in chart_images]
-            if not paths:
-                return {"ok": False,
-                        "error": "这份报告没有可拼的图表（可能是纯文本/图片输入，"
-                                 "或静态图渲染未成功）"}
-            p = combine_images(paths, os.path.join(out_dir, "charts.png"),
-                               layout_columns(payload.get("cols")))
-            if not p:
-                return {"ok": False, "error": "图片拼接失败，可在报告里逐张「保存为 PNG」"}
-        elif kind == "docx":
-            p = render_docx(sub["datasets"], sub["spec"], sub["chart_blocks"],
-                            sub["metric_cards"], sub["summary"], out_dir,
-                            chart_images)
-        elif kind == "xlsx":
-            from core.excel_export import save_report_excel
-            p = save_report_excel(sub, out_dir)
-        else:
-            p = render_pdf(sub["datasets"], sub["spec"], sub["chart_blocks"],
-                           sub["metric_cards"], sub["summary"], out_dir,
-                           chart_images)
-    except RuntimeError as e:
-        return {"ok": False, "error": str(e)}
-
-    rel = os.path.relpath(p, ROOT).replace("\\", "/")
-    return {"ok": True, "url": f"/{rel}", "path": p}
-
-
-@app.post("/api/convert")
-def convert(file: UploadFile = File(...), to: str = Form(...)):
-    """Word <-> PDF 互转。同步 def：python-docx / pdfplumber / reportlab 都是纯 CPU。"""
-    if Document is None or SimpleDocTemplate is None or pdfplumber is None:
-        raise HTTPException(500, "转换依赖未安装（python-docx / reportlab / pdfplumber）")
-    name = file.filename or "file"
-    ext = os.path.splitext(name)[1].lower().lstrip(".")
-    if ext not in ("docx", "pdf") or to not in ("docx", "pdf") or ext == to:
-        raise HTTPException(400, f"暂只支持 docx 与 pdf 互转（收到：{ext or '无扩展名'} → {to}）")
-    sub = os.path.join(TEMP_DIR, uuid.uuid4().hex[:8])
-    os.makedirs(sub, exist_ok=True)
-    src_path = os.path.join(sub, _safe(name) or ("file." + ext))
-    try:
-        with open(src_path, "wb") as fp:
-            while True:
-                chunk = file.file.read(1024 * 1024)
-                if not chunk:
-                    break
-                fp.write(chunk)
-        out_path = os.path.join(sub, "converted." + to)
-        if ext == "docx" and to == "pdf":
-            engine = convert_docx_to_pdf(src_path, out_path)
-        else:
-            convert_pdf_to_docx(src_path, out_path)
-            engine = "python"
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(400, f"转换失败：{type(e).__name__}: {e}")
-    out_name = os.path.splitext(name)[0] + "." + to
-    mt = "application/pdf" if to == "pdf" else \
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    return FileResponse(out_path, filename=out_name, media_type=mt,
-                        headers={"X-Convert-Engine": engine})
 
 
 def cleanup_temp(max_age_hours: int = 24, limit: int = 15) -> int:
@@ -1500,10 +414,6 @@ def _purge(path: str) -> bool:
         return False
 
 
-# *.tmp 的回收宽限期。*.deleted 不用宽限（见 _residue_plan 里的说明）：
-# 前者可能是正在写入的半截文件，误删会弄坏用户刚做出来的东西；
-# 后者是删除操作**已经失败**之后的残留，没有任何流程会再去读它。
-RESIDUE_TMP_DAYS = 3
 
 
 def _residue_plan() -> list[tuple[str, tuple[str, ...] | None, int | None]]:
@@ -1602,17 +512,6 @@ def cleanup_residue(limit: int = 20) -> int:
             n += 1
     return n
 
-
-def _resolve(ids: list[str]) -> list[Dataset]:
-    out = []
-    for i, item in _session_snapshot():
-        if i in (ids or []):
-            out.append(item["dataset"])
-    return out
-
-
-def _safe(name: str) -> str:
-    return re.sub(r'[\\/:*?"<>|]+', "_", name)[:60]
 
 
 def _pick_port(host: str, port: int, tries: int = 12) -> int:

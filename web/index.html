@@ -3,290 +3,504 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
 <title>ReportStudio · 多源数据报告生成器</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 
-<header class="top">
-  <h1 class="brand">ReportStudio</h1>
-  <div class="sub">多源数据报告生成器</div>
-  <div id="llmFlag" class="flag">检查中…</div>
-</header>
+<div class="shell">
 
-<main class="grid">
-
-  <div class="col">
-
-    <section class="panel">
-      <h2><i class="st">1</i>导入数据</h2>
-      <div id="drop" class="drop" role="button" tabindex="0"
-           aria-label="上传数据文件：拖文件到这里，或按回车打开文件选择框">
-        <div class="drop-inner">
-          <div class="drop-title">拖文件到这里</div>
-          <div class="drop-sub">或点击选择 · xlsx / xls / csv / pdf / docx / txt / md / 图片</div>
-        </div>
-        <input type="file" id="file" multiple hidden>
+  <!-- ============ 左侧导航栏 ============ -->
+  <aside class="rail" aria-label="工作台导航">
+    <div class="rail-brand">
+      <span class="mark" aria-hidden="true"></span>
+      <div class="brandbox">
+        <h1 class="brand">ReportStudio</h1>
+        <div class="sub">多源数据报告生成器</div>
       </div>
-      <div class="btns-row">
-        <button id="folderBtn" class="btn ghost sm">指定文件夹批量导入</button>
-        <button id="demoBtn" class="btn ghost sm">载入示例数据</button>
-      </div>
-      <input type="file" id="folder" webkitdirectory directory multiple hidden>
-      <div class="paste-box">
-        <textarea id="paste" rows="3" aria-label="粘贴表格数据"
-          placeholder="也可以直接粘贴一段表格：从 Excel 复制，或从网页复制 Markdown 表格"></textarea>
-        <button id="pasteBtn" class="btn ghost sm">粘贴导入</button>
-      </div>
-      <div id="files" class="filelist"></div>
-      <div class="btns-row">
-        <button id="clearAll" class="btn ghost sm danger">清空所有数据</button>
-        <span class="hint">会连磁盘上的会话缓存一起清掉</span>
-      </div>
-    </section>
-
-    <section class="panel">
-      <h2><i class="st">4</i>多文件怎么整合</h2>
-      <div id="mergeHint" class="empty">导入两份以上文件后，这里会给出建议。</div>
-      <div id="mergeBox" hidden>
-        <div class="row">
-          <label><input type="radio" name="mmode" value="merge" checked> 合并成一张大表</label>
-        </div>
-        <div class="row">
-          <label><input type="radio" name="mmode" value="separate"> 各自独立成章节</label>
-        </div>
-        <div id="mergeGroups" class="hint"></div>
-      </div>
-      <div class="row" style="margin-top:10px">
-        <label><input type="checkbox" id="exclSum" checked> 剔除「合计/总计/小计」行</label>
-        <span class="hint">不勾的话，合计行会被当成一条数据算进去</span>
-      </div>
-    </section>
-  </div>
-
-  <div class="col">
-
-    <section class="panel">
-      <h2><i class="st">2</i>从数据库取数（SQL · 只读）</h2>
-      <details id="dbDetails">
-        <summary class="db-sum">连 SQLite / MySQL / PostgreSQL / SQL Server / Oracle，用 SQL 查出来的数据直接当数据表用</summary>
-
-        <div class="db-note">
-          <b>只读</b>：只执行 <code>SELECT / WITH</code>。INSERT / UPDATE / DELETE / DROP / 改表结构
-          一律在语句层拦下，SQLite 还会以只读方式打开做兜底 —— 不会动到你的库。
-        </div>
-
-        <div class="row">
-          <label for="dbSaved">已存连接</label>
-          <select id="dbSaved"></select>
-          <button id="dbDelConn" class="btn ghost sm">删除</button>
-        </div>
-
-        <div class="row">
-          <label for="dbKind">类型</label>
-          <select id="dbKind"></select>
-        </div>
-        <div class="row">
-          <label for="dbConnName">连接名</label>
-          <input id="dbConnName" class="txt" placeholder="留空自动取名，如「生产库只读」">
-        </div>
-
-        <div id="dbFields"></div>
-
-        <div class="row">
-          <label><input type="checkbox" id="dbRemember" checked> 记住密码</label>
-          <span class="hint">存项目目录下的 db_connections.json，明文；不想留就取消勾选</span>
-        </div>
-
-        <div class="btns-row">
-          <button id="dbTest" class="btn ghost sm">测试连接</button>
-          <button id="dbSave" class="btn ghost sm">保存这个连接</button>
-          <button id="dbScan" class="btn ghost sm">浏览库里的表</button>
-          <button id="dbPickFile" class="btn ghost sm">上传 SQLite 库文件</button>
-          <input type="file" id="dbFile" accept=".db,.sqlite,.sqlite3,.db3" hidden>
-        </div>
-        <div id="dbMsg" class="msg" aria-live="polite"></div>
-        <div id="dbTables" class="filelist"></div>
-
-        <div class="db-sql-row">
-          <textarea id="dbSql" rows="5" spellcheck="false" aria-label="SQL 查询语句（只读）"
-            placeholder="SELECT province AS 省份, SUM(amount) AS 销售额&#10;FROM sales&#10;GROUP BY province&#10;ORDER BY 销售额 DESC"></textarea>
-        </div>
-        <div class="btns-row">
-          <button id="dbRun" class="btn primary sm">执行并导入为数据表</button>
-          <button id="dbPreview" class="btn ghost sm">只看结果</button>
-          <label class="hint"><input type="checkbox" id="dbAutoChart" checked> 顺便预填图表配置</label>
-        </div>
-        <div id="dbSqlMsg" class="msg" aria-live="polite"></div>
-        <div id="dbResult"></div>
-      </details>
-    </section>
-
-    <section class="panel">
-      <h2><i class="st">5</i>告诉我你要什么</h2>
-      <div class="row">
-        <label for="rTitle">报告标题</label>
-        <input id="rTitle" class="txt" value="数据分析报告">
-      </div>
-      <div class="row">
-        <label for="rTpl">模板</label>
-        <select id="rTpl">
-          <option value="full">完整（指标 + 图表 + 明细 + 来源）</option>
-          <option value="simple">精简（指标 + 图表 + 结论）</option>
-        </select>
-      </div>
-      <div class="row">
-        <label for="rLayout">图表版面</label>
-        <select id="rLayout">
-          <option value="1">每行 1 张（图最大）</option>
-          <option value="2">每行 2 张</option>
-          <option value="3">每行 3 张</option>
-        </select>
-        <span class="hint">并排能一屏看全，单张会相应变小</span>
-      </div>
-      <div class="row">
-        <label for="rDetailCol">明细排序</label>
-        <select id="rDetailCol">
-          <option value="">保持原始顺序（不排序）</option>
-        </select>
-        <select id="rDetailDir">
-          <option value="asc">升序</option>
-          <option value="desc">降序</option>
-        </select>
-        <span class="hint">只作用于报告末尾的明细数据表，不影响图表与源数据</span>
-      </div>
-      <div class="nl-box">
-        <input id="nl" class="txt" aria-label="一句话描述报表需求"
-          placeholder="一句话说需求，如：按月统计销售额画柱状图降序">
-        <button id="nlBtn" class="btn ghost sm">解析</button>
-      </div>
-      <div id="nlMsg" class="hint"></div>
-      <div id="charts"></div>
-      <button id="addChart" class="btn ghost">+ 加一张图</button>
-      <div class="row" style="margin-top:10px">
-        <label>指标列</label>
-        <div id="metricCols" class="chips"></div>
-      </div>
-      <button id="gen" class="btn primary">生成报告</button>
-      <div id="genMsg" class="msg" aria-live="polite"></div>
-    </section>
-  </div>
-
-  <div class="col">
-
-    <section class="panel">
-      <h2><i class="st">3</i>数据预览与修正</h2>
-      <div id="empty" class="empty">还没有数据。先导入文件或粘贴一段表格。</div>
-      <div id="preview" hidden>
-        <div class="row">
-          <label for="dsSelect">数据表</label>
-          <select id="dsSelect"></select>
-          <button id="delDs" class="btn ghost sm">移除这张</button>
-        </div>
-        <div class="row">
-          <label for="exportKind">导出</label>
-          <select id="exportKind" class="auto">
-            <option value="csv">CSV（Excel 可直接打开）</option>
-            <option value="xlsx">Excel（.xlsx）</option>
-          </select>
-          <button id="exportDs" class="btn ghost sm">导出这张表</button>
-          <span class="hint">导出的是修正后的结果</span>
-        </div>
-        <div class="row">
-          <label for="headerRow">表头行</label>
-          <input id="headerRow" type="number" min="1" value="1" class="num">
-          <button id="applyHeader" class="btn ghost sm">应用</button>
-          <span class="hint">第几行是列名，改完点应用</span>
-        </div>
-        <div id="types" class="types"></div>
-        <div id="warns" class="warns"></div>
-        <div class="tablewrap"><table id="ptable"></table></div>
-      </div>
-    </section>
-
-    <section class="panel">
-      <h2><i class="st">6</i>数据看板（一屏概览）</h2>
-      <div class="db-note">看板把上面配好的图 + 指标列排成一屏网格，适合挂屏幕或汇报截图。
-        <b>存下来的不是数字，而是「怎么算」</b> —— 之后每次打开都按当前数据重算，看板永远是新的。
-        每张图的「宽度」在上面图表卡里选。</div>
-      <div class="row">
-        <label for="dashName">看板名称</label>
-        <input id="dashName" class="txt" placeholder="如：销售经营看板">
-        <button id="dashSave" class="btn primary sm">保存到看板</button>
-      </div>
-      <div id="dashMsg" class="msg" aria-live="polite"></div>
-      <div class="subhead">
-        <span class="lbl">已存看板</span>
-        <button id="dashRefreshList" class="btn ghost sm">刷新列表</button>
-      </div>
-      <div id="dashList" class="histlist"></div>
-    </section>
-  </div>
-
-</main>
-
-<section class="panel preview">
-  <div class="viewbar">
-    <div class="viewtabs" role="tablist" aria-label="预览视图切换">
-      <button class="vtab on" id="tabReport" data-view="report" role="tab"
-              aria-selected="true" aria-controls="frame">报告</button>
-      <button class="vtab" id="tabDash" data-view="dash" role="tab"
-              aria-selected="false" aria-controls="frame">看板</button>
-      <button class="vtab" id="tabConvert" data-view="convert" role="tab"
-              aria-selected="false" aria-controls="convArea">格式转换</button>
     </div>
-    <span id="outInfo" class="hint">生成后在这里预览</span>
-    <span style="flex:1"></span>
-    <span class="vacts" id="actsReport">
-      <button id="openNew" class="btn ghost sm" disabled>新窗口打开</button>
-      <button id="dlHtml" class="btn ghost sm" disabled>下载 HTML</button>
-      <button id="dlMd" class="btn ghost sm" disabled>下载 Markdown</button>
-      <button id="dlDocx" class="btn ghost sm" disabled>导出 Word</button>
-      <button id="dlPdf" class="btn ghost sm" disabled>导出 PDF</button>
-      <button id="dlPng" class="btn ghost sm" disabled>导出总图</button>
-    </span>
-    <span class="vacts" id="actsDash" hidden>
-      <button id="dashRefresh" class="btn ghost sm">按当前配置重算</button>
-      <button id="dashOpenNew" class="btn ghost sm" disabled>新窗口打开</button>
-    </span>
-    <button id="frameZoom" class="btn ghost sm" disabled>放大预览</button>
-  </div>
-  <div id="frameEmpty" class="frame-empty">还没有内容 —— 配好图表后点「生成报告」，或者切到「看板」页签。<br>
-    生成好的报告是自包含的单个 HTML 文件，发给别人双击就能看。</div>
-  <iframe id="frame" class="is-empty" src="about:blank" title="报告 / 看板预览"></iframe>
-  <div id="convArea" class="conv-area" hidden>
-    <div class="conv-head">文档格式互转</div>
-    <div id="convDrop" class="drop" role="button" tabindex="0">拖入或点击选择 Word / PDF 文件（本机转换，文件不出电脑）</div>
-    <input id="convFile" type="file" accept=".docx,.pdf" hidden>
-    <div class="row conv-opts">
-      <label><input type="radio" name="convTo" value="pdf" checked> 转成 PDF</label>
-      <label><input type="radio" name="convTo" value="docx"> 转成 Word</label>
-    </div>
-    <div class="row">
-      <button id="convBtn" class="btn primary" disabled>开始转换</button>
-      <span id="convMsg" class="msg" aria-live="polite"></span>
-    </div>
-    <div id="convResult" class="filelist"></div>
-    <div class="hint conv-tip">Word→PDF 保留文字 / 表格 / 图片；PDF→Word 仅支持有文字层的 PDF（扫描件需 OCR，暂不支持），多栏 PDF 可能串行。</div>
-  </div>
-</section>
 
-<section class="panel preview">
-  <h2 class="plain">历史报告</h2>
-  <div class="row">
-    <input id="histQ" class="txt" type="search" aria-label="搜索报告名" placeholder="搜索报告名（输入即筛）">
-    <button id="refreshHist" class="btn ghost sm">刷新</button>
+    <nav class="nav">
+      <div class="nav-grp">总览</div>
+      <button class="nav-item on" type="button" data-goto="overview" aria-current="page">
+        <svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h7V4H4v9Zm0 7h7v-5H4v5Zm9 0h7v-9h-7v9Zm0-16v5h7V4h-7Z"/></svg>
+        <span>分析概览</span>
+      </button>
+
+      <div class="nav-grp">数据接入</div>
+      <button class="nav-item" type="button" data-goto="ingest">
+        <svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v10m0 0 3.5-3.5M12 13 8.5 9.5M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+        <span>导入数据</span>
+        <em class="nbadge" id="navDsCount">0</em>
+      </button>
+      <button class="nav-item" type="button" data-goto="database">
+        <svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/></svg>
+        <span>数据库取数</span>
+      </button>
+      <button class="nav-item" type="button" data-goto="data">
+        <svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11"/></svg>
+        <span>数据预览</span>
+      </button>
+
+      <div class="nav-grp">分析产出</div>
+      <button class="nav-item" type="button" data-goto="spec">
+        <svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10m5 10V4m5 16v-7m5 7V8"/></svg>
+        <span>图表配置</span>
+        <em class="nbadge" id="navChartCount">0</em>
+      </button>
+      <button class="nav-item" type="button" data-goto="dashboards">
+        <svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="5" rx="1.5"/><rect x="13" y="10" width="8" height="11" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/></svg>
+        <span>数据看板</span>
+        <em class="nbadge" id="navDashCount">0</em>
+      </button>
+      <button class="nav-item" type="button" data-goto="output">
+        <svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h7"/></svg>
+        <span>报告输出</span>
+      </button>
+      <button class="nav-item" type="button" data-goto="history">
+        <svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v4.5l3 2"/></svg>
+        <span>历史报告</span>
+        <em class="nbadge" id="navHistCount">0</em>
+      </button>
+    </nav>
+
+    <div class="rail-foot">
+      <button id="themeBtn" class="theme-toggle" type="button" aria-label="切换深浅主题">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>
+        </svg><span id="themeBtnText">浅色</span>
+      </button>
+      <div class="rail-tip">本机运行 · 文件不出电脑</div>
+    </div>
+  </aside>
+
+  <!-- ============ 主舞台 ============ -->
+  <div class="stage">
+
+    <header class="topbar">
+      <div class="tb-left">
+        <h2 class="tb-title" id="viewTitle">分析概览</h2>
+        <p class="tb-sub" id="viewSub">当前会话的数据、产出与下一步。</p>
+      </div>
+      <div class="tb-right">
+        <div class="ctx" id="ctxPill">尚未载入数据</div>
+        <div id="llmFlag" class="flag">检查中…</div>
+      </div>
+    </header>
+
+    <!-- 跨屏消息条：报错写在别的屏里等于没写（那一屏是隐藏的），这里兜一份 -->
+    <div id="globalMsg" class="gmsg" role="status" aria-live="polite" hidden></div>
+
+    <main class="views">
+
+      <!-- ---------- 概览 ---------- -->
+      <section class="view on" data-view="overview" aria-label="分析概览">
+        <div class="kpigrid">
+          <div class="kpi k1">
+            <div class="k-label">数据表</div>
+            <div class="k-val" id="kpiTables">0</div>
+            <div class="k-foot">本次会话已导入 / 取数</div>
+          </div>
+          <div class="kpi k2">
+            <div class="k-label">当前表行数</div>
+            <div class="k-val" id="kpiRows">0</div>
+            <div class="k-foot" id="kpiRowsFoot">列数与来源见「数据预览」</div>
+          </div>
+          <div class="kpi k3">
+            <div class="k-label">图表配置</div>
+            <div class="k-val" id="kpiCharts">0</div>
+            <div class="k-foot">已配好的图块数量</div>
+          </div>
+          <div class="kpi k4">
+            <div class="k-label">已存看板</div>
+            <div class="k-val" id="kpiDashboards">0</div>
+            <div class="k-foot">存的是「怎么算」，打开即新数据</div>
+          </div>
+          <div class="kpi k5">
+            <div class="k-label">历史报告</div>
+            <div class="k-val" id="kpiReports">0</div>
+            <div class="k-foot" id="kpiReportsFoot">还没有生成过报告</div>
+          </div>
+        </div>
+
+        <div class="panel flow">
+          <h2 class="plain">分析流程</h2>
+          <p class="lead">数据落在这台机器上处理，产物是自包含文件，发给别人双击就能看。按下面的顺序走，也可以随时跳到任意一步。</p>
+          <div class="flowgrid">
+            <button class="flowcard" type="button" data-goto="ingest">
+              <i class="st">1</i>
+              <div class="fc-t">导入数据</div>
+              <div class="fc-d">拖文件、点选、粘贴表格，或指定文件夹批量导入；没数据时可直接载入示例。</div>
+            </button>
+            <button class="flowcard" type="button" data-goto="database">
+              <i class="st">2</i>
+              <div class="fc-t">数据库取数</div>
+              <div class="fc-d">SQLite / MySQL / PostgreSQL / SQL Server / Oracle，写只读 SQL，结果直接当数据表用。</div>
+            </button>
+            <button class="flowcard" type="button" data-goto="data">
+              <i class="st">3</i>
+              <div class="fc-t">数据预览与修正</div>
+              <div class="fc-d">改表头行号、改列类型，看解析提示；筛选、排序、导出修正后的表。</div>
+            </button>
+            <button class="flowcard" type="button" data-goto="spec">
+              <i class="st">4</i>
+              <div class="fc-t">图表配置</div>
+              <div class="fc-d">一句话描述，或手动勾选图型 / 横轴 / 数值 / 聚合 / 排序，每个指标可各选各的图型。</div>
+            </button>
+            <button class="flowcard" type="button" data-goto="dashboards">
+              <i class="st">5</i>
+              <div class="fc-t">数据看板</div>
+              <div class="fc-d">把配好的图与指标排成一屏 12 栅格，起名保存；下次打开按当前数据重算。</div>
+            </button>
+            <button class="flowcard" type="button" data-goto="output">
+              <i class="st">6</i>
+              <div class="fc-t">报告输出</div>
+              <div class="fc-d">报告 / 看板就地预览，导出 Markdown、Word、PDF、总图 PNG，也能新窗口打开。</div>
+            </button>
+          </div>
+        </div>
+
+        <div class="duo">
+          <section class="panel">
+            <h2 class="plain">这页能处理什么</h2>
+            <ul class="infolist">
+              <li><b>表格</b> xlsx / xlsm / xls / csv / tsv：多 sheet 逐个导入，GBK 与分号、竖线分隔自动识别，合并单元格前向填充。</li>
+              <li><b>文档</b> docx / txt / md：抽内嵌表格，再从「指标：值」这类行里抽键值对。</li>
+              <li><b>PDF</b> 文本型直接抽表；扫描件走视觉模型（需配大模型）。</li>
+              <li><b>图片</b> png / jpg / webp / bmp：需配置大模型才能识别。</li>
+              <li><b>粘贴</b> Markdown 表格优先，否则按 Tab、多空格、逗号或竖线自动分列。</li>
+            </ul>
+          </section>
+          <section class="panel">
+            <h2 class="plain">数字怎么来的</h2>
+            <ul class="infolist">
+              <li>报告里的数字全部由后端聚合计算产出，大模型只把算好的数字改写成段落，不碰任何数值。</li>
+              <li>全角数字、中文量级（1.2万 / 3亿）、货币符号加千分位、百分号都会识别成数值；「约1.2万」这种夹字的如实判为文本。</li>
+              <li>列名含「率 / 占比」且值在 0~1.5 的列按百分比列处理，聚合出均值而不是求和。</li>
+              <li>时间维度按自然排序，1月 2月 不会排成 1月 10月。</li>
+            </ul>
+          </section>
+        </div>
+      </section>
+
+      <!-- ---------- 导入数据 ---------- -->
+      <section class="view" data-view="ingest" aria-label="导入数据">
+        <div class="vgrid">
+          <section class="panel">
+            <h2><i class="st">1</i>导入数据</h2>
+            <div id="drop" class="drop" role="button" tabindex="0"
+                 aria-label="上传数据文件：拖文件到这里，或按回车打开文件选择框">
+              <div class="drop-inner">
+                <div class="drop-title">拖文件到这里</div>
+                <div class="drop-sub">或点击选择 · xlsx / xls / csv / pdf / docx / txt / md / 图片</div>
+              </div>
+              <input type="file" id="file" multiple hidden>
+            </div>
+            <div class="btns-row">
+              <button id="folderBtn" class="btn ghost sm">指定文件夹批量导入</button>
+              <button id="demoBtn" class="btn ghost sm">载入示例数据</button>
+            </div>
+            <input type="file" id="folder" webkitdirectory directory multiple hidden>
+            <div class="paste-box">
+              <textarea id="paste" rows="3" aria-label="粘贴表格数据"
+                placeholder="也可以直接粘贴一段表格：从 Excel 复制，或从网页复制 Markdown 表格"></textarea>
+              <button id="pasteBtn" class="btn ghost sm">粘贴导入</button>
+            </div>
+            <div id="files" class="filelist"></div>
+            <div class="btns-row">
+              <button id="clearAll" class="btn ghost sm danger">清空所有数据</button>
+              <span class="hint">会连磁盘上的会话缓存一起清掉</span>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2 class="plain">多文件怎么整合</h2>
+            <div id="mergeHint" class="empty">导入两份以上文件后，这里会给出建议。</div>
+            <div id="mergeBox" hidden>
+              <div class="row">
+                <label><input type="radio" name="mmode" value="merge" checked> 合并成一张大表</label>
+              </div>
+              <div class="row">
+                <label><input type="radio" name="mmode" value="separate"> 各自独立成章节</label>
+              </div>
+              <div id="mergeGroups" class="hint"></div>
+            </div>
+            <div class="row" style="margin-top:10px">
+              <label><input type="checkbox" id="exclSum" checked> 剔除「合计/总计/小计」行</label>
+              <span class="hint">不勾的话，合计行会被当成一条数据算进去</span>
+            </div>
+            <div class="sidenote">
+              导入的表会落盘到项目目录下的 <code>session\</code>，关掉服务再打开还在，不用重新传。
+              5 万行以上只放内存，7 天前的缓存自动清理。异构的各成章节，同构的可合并；
+              合并时同名列类型冲突按「数字 &gt; 日期 &gt; 文本」取更精确的类型。
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <!-- ---------- 数据库取数 ---------- -->
+      <section class="view" data-view="database" aria-label="数据库取数">
+        <section class="panel">
+          <h2><i class="st">2</i>从数据库取数（SQL · 只读）</h2>
+          <details id="dbDetails" open>
+            <summary class="db-sum">连 SQLite / MySQL / PostgreSQL / SQL Server / Oracle，用 SQL 查出来的数据直接当数据表用</summary>
+
+            <div class="db-note">
+              <b>只读</b>：只执行 <code>SELECT / WITH</code>。INSERT / UPDATE / DELETE / DROP / 改表结构
+              一律在语句层拦下，SQLite 还会以只读方式打开做兜底 —— 不会动到你的库。
+            </div>
+
+            <div class="row">
+              <label for="dbSaved">已存连接</label>
+              <select id="dbSaved"></select>
+              <button id="dbDelConn" class="btn ghost sm">删除</button>
+            </div>
+
+            <div class="row">
+              <label for="dbKind">类型</label>
+              <select id="dbKind"></select>
+            </div>
+            <div class="row">
+              <label for="dbConnName">连接名</label>
+              <input id="dbConnName" class="txt" placeholder="留空自动取名，如「生产库只读」">
+            </div>
+
+            <div id="dbFields"></div>
+
+            <div class="row">
+              <label><input type="checkbox" id="dbRemember" checked> 记住密码</label>
+              <span class="hint">存项目目录下的 db_connections.json；不想留就取消勾选</span>
+            </div>
+
+            <div class="btns-row">
+              <button id="dbTest" class="btn ghost sm">测试连接</button>
+              <button id="dbSave" class="btn ghost sm">保存这个连接</button>
+              <button id="dbScan" class="btn ghost sm">浏览库里的表</button>
+              <button id="dbPickFile" class="btn ghost sm">上传 SQLite 库文件</button>
+              <input type="file" id="dbFile" accept=".db,.sqlite,.sqlite3,.db3" hidden>
+            </div>
+            <div id="dbMsg" class="msg" aria-live="polite"></div>
+            <div id="dbTables" class="filelist"></div>
+
+            <div class="db-sql-row">
+              <textarea id="dbSql" rows="5" spellcheck="false" aria-label="SQL 查询语句（只读）"
+                placeholder="SELECT province AS 省份, SUM(amount) AS 销售额&#10;FROM sales&#10;GROUP BY province&#10;ORDER BY 销售额 DESC"></textarea>
+            </div>
+            <div class="btns-row">
+              <button id="dbRun" class="btn primary sm">执行并导入为数据表</button>
+              <button id="dbPreview" class="btn ghost sm">只看结果</button>
+              <label class="hint"><input type="checkbox" id="dbAutoChart" checked> 顺便预填图表配置</label>
+            </div>
+            <div id="dbSqlMsg" class="msg" aria-live="polite"></div>
+            <div id="dbResult"></div>
+          </details>
+        </section>
+      </section>
+
+      <!-- ---------- 数据预览 ---------- -->
+      <section class="view" data-view="data" aria-label="数据预览与修正">
+        <section class="panel">
+          <h2><i class="st">3</i>数据预览与修正</h2>
+          <div id="empty" class="empty">还没有数据。先导入文件或粘贴一段表格。</div>
+          <div id="preview" hidden>
+            <div class="row">
+              <label for="dsSelect">数据表</label>
+              <select id="dsSelect"></select>
+              <button id="delDs" class="btn ghost sm">移除这张</button>
+            </div>
+            <div class="row">
+              <label for="exportKind">导出</label>
+              <select id="exportKind" class="auto">
+                <option value="csv">CSV（Excel 可直接打开）</option>
+                <option value="xlsx">Excel（.xlsx）</option>
+                <option value="docx">Word（.docx）</option>
+                <option value="pdf">PDF</option>
+              </select>
+              <button id="exportDs" class="btn ghost sm">导出这张表</button>
+              <span class="hint">导出的是修正后的结果</span>
+            </div>
+            <div class="row">
+              <label for="headerRow">表头行</label>
+              <input id="headerRow" type="number" min="1" value="1" class="num">
+              <button id="applyHeader" class="btn ghost sm">应用</button>
+              <span class="hint">第几行是列名，改完点应用</span>
+            </div>
+            <div id="types" class="types"></div>
+            <div id="warns" class="warns"></div>
+            <div class="tbl-bar">
+              <input id="tblFilter" class="txt" type="search" aria-label="筛选当前数据表"
+                placeholder="筛选：输入关键字，任一列命中即显示（支持多词）">
+              <select id="tblRows" class="auto" aria-label="显示行数">
+                <option value="60" selected>显示前 60 行</option>
+                <option value="200">显示前 200 行</option>
+                <option value="0">全部行</option>
+              </select>
+              <button id="tblClear" class="btn ghost sm">清除筛选</button>
+              <span class="hint" id="tblInfo"></span>
+            </div>
+            <div class="tablewrap"><table id="ptable"></table></div>
+          </div>
+        </section>
+      </section>
+
+      <!-- ---------- 图表配置 ---------- -->
+      <section class="view" data-view="spec" aria-label="图表配置">
+        <section class="panel">
+          <h2><i class="st">4</i>图表配置</h2>
+          <div class="specbar">
+            <div class="row">
+              <label for="rTitle">报告标题</label>
+              <input id="rTitle" class="txt" value="数据分析报告">
+            </div>
+            <div class="row">
+              <label for="rTpl">模板</label>
+              <select id="rTpl" class="auto">
+                <option value="full">完整（指标 + 图表 + 明细 + 来源）</option>
+                <option value="simple">精简（指标 + 图表 + 结论）</option>
+              </select>
+              <label for="rLayout">版面</label>
+              <select id="rLayout" class="auto">
+                <option value="1">每行 1 张（图最大）</option>
+                <option value="2">每行 2 张</option>
+                <option value="3">每行 3 张</option>
+              </select>
+              <span class="hint">并排能一屏看全，单张会相应变小</span>
+            </div>
+            <div class="row">
+              <label for="rDetailCol">明细排序</label>
+              <select id="rDetailCol" class="auto">
+                <option value="">保持原始顺序（不排序）</option>
+              </select>
+              <select id="rDetailDir" class="auto">
+                <option value="asc">升序</option>
+                <option value="desc">降序</option>
+              </select>
+              <span class="hint">只作用于报告末尾的明细数据表，不影响图表与源数据</span>
+            </div>
+            <div class="nl-box">
+              <input id="nl" class="txt" aria-label="一句话描述报表需求"
+                placeholder="一句话说需求，如：按月统计销售额画柱状图降序">
+              <button id="nlBtn" class="btn ghost sm">解析</button>
+            </div>
+            <div id="nlMsg" class="hint"></div>
+          </div>
+
+          <div class="subhead">
+            <span class="lbl">图表卡片</span>
+            <span class="hint">每张卡里勾了多个指标时，可在「数值」下给每个指标各选一种图型</span>
+          </div>
+          <div id="charts"></div>
+          <button id="addChart" class="btn ghost">+ 加一张图</button>
+
+          <div class="row" style="margin-top:14px">
+            <label>指标列</label>
+            <div id="metricCols" class="chips"></div>
+          </div>
+          <button id="gen" class="btn primary">生成报告</button>
+          <div id="genMsg" class="msg" aria-live="polite"></div>
+        </section>
+      </section>
+
+      <!-- ---------- 数据看板 ---------- -->
+      <section class="view" data-view="dashboards" aria-label="数据看板">
+        <section class="panel">
+          <h2><i class="st">5</i>数据看板（一屏概览）</h2>
+          <div class="db-note">看板把「图表配置」里配好的图 + 指标列排成一屏网格，适合挂屏幕或汇报截图。
+            <b>存下来的不是数字，而是「怎么算」</b> —— 之后每次打开都按当前数据重算，看板永远是新的。
+            每张图的「宽度」在「图表配置」的图表卡里选。</div>
+          <div class="row">
+            <label for="dashName">看板名称</label>
+            <input id="dashName" class="txt" placeholder="如：销售经营看板">
+            <button id="dashSave" class="btn primary sm">保存到看板</button>
+          </div>
+          <div id="dashMsg" class="msg" aria-live="polite"></div>
+          <div class="subhead">
+            <span class="lbl">已存看板</span>
+            <select id="dashSort" class="auto" aria-label="看板列表排序">
+              <option value="updated">按更新时间</option>
+              <option value="name">按名称</option>
+              <option value="charts">按图数</option>
+            </select>
+            <span style="flex:1"></span>
+            <button id="dashRefreshList" class="btn ghost sm">刷新列表</button>
+          </div>
+          <div id="dashList" class="histlist"></div>
+        </section>
+      </section>
+
+      <!-- ---------- 报告输出 ---------- -->
+      <section class="view" data-view="output" aria-label="报告输出">
+        <section class="panel preview">
+          <div class="viewbar">
+            <div class="viewtabs" role="tablist" aria-label="预览视图切换">
+              <button class="vtab on" id="tabReport" data-view="report" role="tab"
+                      aria-selected="true" aria-controls="frame">报告</button>
+              <button class="vtab" id="tabDash" data-view="dash" role="tab"
+                      aria-selected="false" aria-controls="frame">看板</button>
+              <button class="vtab" id="tabConvert" data-view="convert" role="tab"
+                      aria-selected="false" aria-controls="convArea">格式转换</button>
+            </div>
+            <span id="outInfo" class="hint">生成后在这里预览</span>
+            <span style="flex:1"></span>
+            <span class="vacts" id="actsReport">
+              <button id="openNew" class="btn ghost sm" disabled>新窗口打开</button>
+              <button id="dlHtml" class="btn ghost sm" disabled>下载 HTML</button>
+              <button id="dlMd" class="btn ghost sm" disabled>下载 Markdown</button>
+              <button id="dlDocx" class="btn ghost sm" disabled>导出 Word</button>
+              <button id="dlPdf" class="btn ghost sm" disabled>导出 PDF</button>
+              <button id="dlPng" class="btn ghost sm" disabled>导出总图</button>
+            </span>
+            <span class="vacts" id="actsDash" hidden>
+              <button id="dashRefresh" class="btn ghost sm">按当前配置重算</button>
+              <button id="dashOpenNew" class="btn ghost sm" disabled>新窗口打开</button>
+            </span>
+            <button id="frameZoom" class="btn ghost sm" disabled>放大预览</button>
+          </div>
+          <div id="frameEmpty" class="frame-empty">还没有内容 —— 配好图表后点「生成报告」，或者切到「看板」页签。<br>
+            生成好的报告是自包含的单个 HTML 文件，发给别人双击就能看。</div>
+          <iframe id="frame" class="is-empty" src="about:blank" title="报告 / 看板预览"></iframe>
+          <div id="convArea" class="conv-area" hidden>
+            <div class="conv-head">文档格式互转</div>
+            <div id="convDrop" class="drop" role="button" tabindex="0">拖入或点击选择 Word / PDF 文件（可多选，本机转换，文件不出电脑）</div>
+            <input id="convFile" type="file" accept=".docx,.pdf" multiple hidden>
+            <div class="row conv-opts">
+              <label><input type="radio" name="convTo" value="pdf" checked> 转成 PDF</label>
+              <label><input type="radio" name="convTo" value="docx"> 转成 Word</label>
+            </div>
+            <div class="row">
+              <button id="convBtn" class="btn primary" disabled>开始转换</button>
+              <span id="convMsg" class="msg" aria-live="polite"></span>
+            </div>
+            <div id="convResult" class="filelist"></div>
+            <div class="hint conv-tip">Word→PDF 保留文字 / 表格 / 图片；PDF→Word 仅支持有文字层的 PDF（扫描件需 OCR，暂不支持），多栏 PDF 可能串行。</div>
+          </div>
+        </section>
+      </section>
+
+      <!-- ---------- 历史报告 ---------- -->
+      <section class="view" data-view="history" aria-label="历史报告">
+        <section class="panel">
+          <h2 class="plain">历史报告</h2>
+          <div class="row">
+            <input id="histQ" class="txt" type="search" aria-label="搜索报告名" placeholder="搜索报告名（输入即筛）">
+            <button id="refreshHist" class="btn ghost sm">刷新</button>
+          </div>
+          <div class="row">
+            <span class="hint" id="outDirHint">输出目录：—</span>
+            <span style="flex:1"></span>
+            <button id="histCleanBtn" class="btn ghost sm danger" hidden>清理旧报告</button>
+            <button id="cleanupBtn" class="btn ghost sm danger" hidden>清理缓存</button>
+            <span class="hint" id="histCount" aria-live="polite"></span>
+          </div>
+          <div id="histMsg" class="msg" aria-live="polite"></div>
+          <div id="hist" class="histlist tall"></div>
+        </section>
+      </section>
+
+    </main>
   </div>
-  <div class="row">
-    <span class="hint" id="outDirHint">输出目录：—</span>
-    <span style="flex:1"></span>
-    <button id="histCleanBtn" class="btn ghost sm danger" hidden>清理旧报告</button>
-    <button id="cleanupBtn" class="btn ghost sm danger" hidden>清理缓存</button>
-    <span class="hint" id="histCount" aria-live="polite"></span>
-  </div>
-  <div id="histMsg" class="msg" aria-live="polite"></div>
-  <div id="hist" class="histlist"></div>
-</section>
+</div>
 
 <script src="/static/app.js"></script>
 </body>

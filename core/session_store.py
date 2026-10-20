@@ -56,6 +56,30 @@ def save(ds: Dataset, grid: list[list] | None) -> bool:
         return False
 
 
+def _parse_file(p: str) -> tuple[Dataset, list[list] | None] | None:
+    """把单个会话文件解析成 (Dataset, grid)。失败时返回 None，由调用方容错。"""
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:
+        return None
+    try:
+        ds = Dataset(
+            id=d.get("id") or os.path.basename(p)[:-5],
+            name=d.get("name") or "已恢复的表",
+            source_type=d.get("source_type") or "unknown",
+            columns=[Column(**c) for c in d.get("columns", [])],
+            rows=d.get("rows", []),
+            raw_text=d.get("raw_text", ""),
+            warnings=list(d.get("warnings", []))
+            + (["这是上次会话恢复的数据表"] if d.get("saved_at") else []),
+            total_rows=d.get("total_rows") or len(d.get("rows", [])),
+        )
+        return ds, d.get("grid")
+    except Exception:
+        return None
+
+
 def load_all() -> list[tuple[Dataset, list[list] | None]]:
     out = []
     try:
@@ -82,26 +106,51 @@ def load_all() -> list[tuple[Dataset, list[list] | None]]:
             except Exception:
                 pass
             continue
+        parsed = _parse_file(p)
+        if parsed is not None:
+            out.append(parsed)
+    return out
+
+
+def load(ds_id: str) -> tuple[Dataset, list[list] | None] | None:
+    """单条重载：数据集被内存淘汰后按需从磁盘取回，取不到返回 None。"""
+    try:
+        return _parse_file(os.path.join(_dir(), str(ds_id) + ".json"))
+    except Exception:
+        return None
+
+
+def meta_all() -> list[dict]:
+    """轻量清单：只取列表展示要的字段，不把整表行数据读进内存。
+
+    内存里的重对象（整表行 + 网格）用 LRU 收口后，被淘汰的数据集靠这个
+    把名称 / 列 / 行数补回列表，避免「列表凭空少了一截」。
+    """
+    out = []
+    try:
+        files = os.listdir(_dir())
+    except Exception:
+        return out
+    _sweep_orphan_tmp(files)
+    now = time.time()
+    for fn in files:
+        if not fn.endswith(".json"):
+            continue
+        p = os.path.join(_dir(), fn)
+        if now - os.path.getmtime(p) > KEEP_DAYS * 86400:
+            continue
         try:
             with open(p, "r", encoding="utf-8") as f:
                 d = json.load(f)
         except Exception:
             continue
-        try:
-            ds = Dataset(
-                id=d.get("id") or os.path.basename(p)[:-5],
-                name=d.get("name") or "已恢复的表",
-                source_type=d.get("source_type") or "unknown",
-                columns=[Column(**c) for c in d.get("columns", [])],
-                rows=d.get("rows", []),
-                raw_text=d.get("raw_text", ""),
-                warnings=list(d.get("warnings", []))
-                + (["这是上次会话恢复的数据表"] if d.get("saved_at") else []),
-                total_rows=d.get("total_rows") or len(d.get("rows", [])),
-            )
-            out.append((ds, d.get("grid")))
-        except Exception:
-            continue
+        out.append({
+            "id": d.get("id") or os.path.basename(p)[:-5],
+            "name": d.get("name") or "已恢复的表",
+            "source_type": d.get("source_type") or "unknown",
+            "columns": d.get("columns", []),
+            "total_rows": d.get("total_rows") or len(d.get("rows", [])),
+        })
     return out
 
 

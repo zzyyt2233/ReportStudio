@@ -25,6 +25,7 @@ from .chartset import build_blocks
 from .topic import build_topic_chart
 from .merge import group_datasets, merge_group
 from .model import ChartSpec, Dataset
+from .render import theme as T
 from .render.dashboard import build_dashboard_html, norm_span
 
 MAX_CHARTS = 24          # 一屏放不下太多；也防止有人拿它去批量刷图
@@ -65,6 +66,9 @@ class DashboardConfig:
     # 和 charts 分开存，是因为「多指标拆开」后渲染出的图块数 > 配置里的图数，
     # 用 block_id（chart0/chart1…）对齐最稳，不受拆分顺序影响。
     sizes: dict = field(default_factory=dict)
+    # 初始主题（light/dark）。保存时记下工作台当时的主题，重新渲染不丢；
+    # 打开后页内仍可现场切换，那个选择记在浏览器里，不写回这里。
+    theme: str = "light"
     updated: str = ""
     created: str = ""
 
@@ -126,6 +130,7 @@ def from_payload(payload: dict, base: DashboardConfig | None = None
         # 用户拖出来的自由尺寸跟图表配置分开存，save 时若不手工带过会被新对象清空。
         # base 传入（在老看板上改）时一律沿用，避免「保存一次尺寸就回弹」。
         sizes=dict(base.sizes) if base and getattr(base, "sizes", None) else {},
+        theme=T.norm(payload.get("theme") or base.theme),
         updated=base.updated,
         created=base.created,
     )
@@ -150,6 +155,7 @@ def list_all() -> list[dict]:
                 "title": d.get("title") or d.get("name") or "",
                 "charts": len(d.get("charts") or []),
                 "metrics": len(d.get("metrics") or []),
+                "datasets": len(d.get("dataset_ids") or []),
                 "updated": d.get("updated") or "",
             })
         except Exception:
@@ -308,7 +314,8 @@ def render(datasets: list[Dataset], cfg: DashboardConfig, vendor_path: str,
 
     html = build_dashboard_html(cfg.title or cfg.name, cfg.subtitle, datasets,
                                 chart_blocks, metric_cards, missing, vendor_path,
-                                dash_id=dash_id if dash_id is not None else cfg.id)
+                                dash_id=dash_id if dash_id is not None else cfg.id,
+                                theme=T.norm(getattr(cfg, "theme", "light")))
     return html, {"charts": len(chart_blocks), "metrics": len(metric_cards),
                   "datasets": len(datasets)}
 

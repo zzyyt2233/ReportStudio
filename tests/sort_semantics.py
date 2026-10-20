@@ -135,13 +135,18 @@ PASTE = """省份\t销售额\t毛利率
 def _chart_order(html: str) -> tuple[list[str], list[float]]:
     """从报告 HTML 里抠出第一张图的横轴标签与数值。
 
+    双主题改版后 option 以 `var OPTS_L=[...]` 随页下发（不再逐图内联
+    c0.setOption(...)），解第一份即可。
     ECharts 的 xAxis 既能是对象也能是数组，两种都接住 —— 只处理一种的话，
     换个图型就会 KeyError，而那是测试自己炸了，不是被测代码有问题。
     """
-    m = re.search(r"c0\.setOption\((\{.*?\})\);", html, re.S)
+    m = re.search(r"var OPTS_L=(\[.*?\]);", html, re.S)
     if not m:
         return [], []
-    opt = json.loads(m.group(1))
+    opts = json.loads(m.group(1))
+    if not opts:
+        return [], []
+    opt = opts[0]
     xa = opt.get("xAxis")
     if isinstance(xa, list):
         xa = xa[0] if xa else {}

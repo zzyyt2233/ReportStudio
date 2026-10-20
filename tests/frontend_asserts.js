@@ -449,6 +449,31 @@ window.__runAsserts = (async function () {
   ok(!!(STORE['demo'] && STORE['demo'].total_rows === 36), '载入后进入左侧数据集列表');
   ok($('#files').textContent.indexOf('示例数据 · 保费月报') >= 0,
      '文件列表里显示这份数据的名字');
+  ok(document.querySelectorAll('.view.on').length === 1,
+     '载入示例后只有「数据预览」这一屏显示');
+
+  /* ---------- 23. 侧栏导航与概览指标 ----------
+     布局从「三列铺开一整页」改成「一次一屏」之后，最容易坏的是两件事：
+     切屏没真的切（class 名写错）、概览数字不跟着变（忘了挂刷新）。 */
+  ok(curTheme() === 'dark', '首次打开走深色（工作台的主设计）');
+  ok($$('.view').length === Object.keys(VIEWS).length,
+     '每一屏都有对应的导航项（' + $$('.view').length + ' 屏）');
+  gotoView('spec');
+  ok($('.view[data-view="spec"]').classList.contains('on'), '点导航后目标那一屏显示出来');
+  ok(!$('.view[data-view="data"]').classList.contains('on'), '原来的那一屏跟着收起');
+  ok($$('.nav-item').filter(b => b.classList.contains('on')).length === 1,
+     '导航里同时只有一个选中项');
+  ok($('.nav-item[data-goto="spec"]').getAttribute('aria-current') === 'page',
+     '选中的导航项带 aria-current（读屏能报出当前位置）');
+  ok($('#viewTitle').textContent === VIEWS.spec[0], '顶栏标题跟着这一屏走');
+  ok(localStorage.getItem('reportstudio.view') === 'spec', '记住停在哪一屏，刷新后还在');
+  refreshKpi();
+  ok($('#kpiTables').textContent === String(Object.keys(STORE).length),
+     '概览的「数据表」数 = STORE 里的表数（实际 ' + $('#kpiTables').textContent + '）');
+  ok($('#navChartCount').textContent === String($$('.chart-card').length),
+     '导航上的图数角标和卡片数一致');
+  ok($('#ctxPill').textContent.indexOf('张表') > 0, '顶栏状态条写明当前有几张表');
+  gotoView('overview');
 
   return true;
 })();

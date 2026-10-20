@@ -9,7 +9,8 @@
 但**解析提示照留**——看板上最容易出事的就是「某个数其实只取回了一部分」，
 把提示藏起来等于让人对着半截数据下判断。
 
-视觉沿用报告的浅色商务配色（同一套 CSS 变量），保证看板截图贴进 Word 不违和。
+主题：深浅两套色板来自 core.render.theme（与报告同一处定义），两套都随页下发，
+页头现场切换、选择记在 localStorage；生成时的初值跟随工作台的当前主题。
 """
 
 from __future__ import annotations
@@ -19,41 +20,55 @@ import os
 from datetime import datetime
 
 from ..model import Dataset
+from . import theme as T
 
 # 每张图占几列（12 栅格）。存盘里存的是 span 数字，这里只认这四档，
 # 认不出来的一律按半宽处理 —— 免得存盘文件被手改坏后整个看板排不出版。
 SPANS = (12, 6, 4, 3)
 
-CSS = """
-:root{--bg:#F7F7F5;--card:#FFFFFF;--ink:#2C2C2A;--ink2:#5F5E5A;--line:#E5E3DC;--accent:#185FA5}
+CSS = T.css_block() + """
 *{box-sizing:border-box}
 /* hidden 必须有兜底：浏览器的 [hidden]{display:none} 属于 UA 样式表，
    作者样式里的 display 一定赢过它。放大层靠 hidden 切换图表/数据表两个视图，
    没有这条 .zb>*{display:flex} 会把数据表照样显示出来。 */
 [hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--ink);
- font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;line-height:1.6}
+ font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;line-height:1.6;
+ background-image:radial-gradient(1400px 420px at 85% -180px,rgba(24,95,165,.08),transparent 72%),
+ radial-gradient(900px 320px at -10% 20%,rgba(24,95,165,.04),transparent 70%);
+ background-attachment:fixed}
+html[data-theme=dark] body{background-image:radial-gradient(1400px 420px at 85% -180px,rgba(91,161,232,.12),transparent 72%),
+ radial-gradient(900px 320px at -10% 20%,rgba(91,161,232,.05),transparent 70%)}
 .wrap{max-width:1600px;margin:0 auto;padding:20px 20px 40px}
 header{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;
  border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:18px}
-h1{font-size:22px;font-weight:500;margin:0}
+h1{font-size:22px;font-weight:600;margin:0;letter-spacing:.2px}
 .sub{color:var(--ink2);font-size:12px}
 .grow{flex:1}
 button.dl{font:inherit;font-size:12px;font-weight:400;padding:4px 12px;cursor:pointer;
- border:1px solid var(--line);background:var(--card);color:var(--ink2);border-radius:6px}
+ border:1px solid var(--line);background:var(--card);color:var(--ink2);border-radius:8px}
 button.dl:hover{border-color:var(--accent);color:var(--accent)}
 /* 指标卡：看板是一屏概览，间距比报告略收敛，但仍然把「标题 / 数值 /
-   口径 / 明细」四层分开 —— 之前 4px 的间距让数值和「合计」粘成一个词。 */
+   口径 / 明细」四层分开 —— 之前 4px 的间距让数值和「合计」粘成一个词。
+   顶部一条 3px 的渐变色带是"KPI 卡"和"普通卡片"最省事的区分。 */
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
  gap:14px;margin-bottom:18px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;
+ box-shadow:0 1px 2px rgba(15,20,28,.05)}
+.metric{position:relative;overflow:hidden;transition:transform .15s,box-shadow .15s}
+.metric::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;
+ background:linear-gradient(90deg,var(--accent),rgba(24,95,165,0) 70%)}
+.metric:hover{transform:translateY(-2px);box-shadow:0 10px 26px -16px rgba(15,20,28,.35)}
 .metric .t{font-size:12px;color:var(--ink2)}
-.metric .v{font-size:27px;font-weight:600;line-height:1.15;margin:10px 0 0}
-.metric .u{font-size:12px;font-weight:400;color:#8A8880;margin-left:8px}
+.metric .v{font-size:27px;font-weight:650;line-height:1.15;margin:10px 0 0;
+ font-variant-numeric:tabular-nums}
+.metric .u{font-size:12px;font-weight:400;color:var(--ink3);margin-left:8px}
 .metric .d{font-size:11px;color:var(--ink2);border-top:1px solid var(--line);
  margin-top:12px;padding-top:8px;line-height:1.7}
 .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px}
-.chart-card{grid-column:span 6;display:flex;flex-direction:column;position:relative}
+.chart-card{grid-column:span 6;display:flex;flex-direction:column;position:relative;
+ box-shadow:0 1px 3px rgba(15,20,28,.05)}
+.chart-card:hover{box-shadow:0 10px 26px -16px rgba(15,20,28,.35)}
 .chart-card .hd{display:flex;align-items:center;gap:10px;font-size:13px;font-weight:500;
  margin-bottom:6px}
 .chart-card .hd span{flex:1}
@@ -67,17 +82,17 @@ button.dl:hover{border-color:var(--accent);color:var(--accent)}
 .rz:hover{background:linear-gradient(var(--accent),var(--accent)) center/2px 100% no-repeat}
 .rz-h:hover{background:linear-gradient(var(--accent),var(--accent)) center/100% 2px no-repeat}
 body.rsz,body.rsz *{user-select:none!important;cursor:inherit}
-.warn{background:#FAEEDA;border:1px solid #FAC775;border-radius:10px;padding:10px 14px;
- font-size:12px;color:#633806;margin-bottom:14px}
+.warn{background:var(--warn_bg);border:1px solid var(--warn_line);border-radius:10px;
+ padding:10px 14px;font-size:12px;color:var(--warn_ink);margin-bottom:14px}
 .warn ul{margin:4px 0 0;padding-left:18px}
 footer{margin-top:26px;color:var(--ink2);font-size:11px;text-align:center}
-.empty{background:var(--card);border:1px dashed var(--line);border-radius:12px;
+.empty{background:var(--card);border:1px dashed var(--line);border-radius:14px;
  padding:40px;text-align:center;color:var(--ink2);font-size:13px}
 
 /* —— 放大某一张图：遮罩 + 面板 —— */
 .zb{position:fixed;inset:0;z-index:80;display:flex;align-items:center;
  justify-content:center}
-.zb-mask{position:absolute;inset:0;background:rgba(44,44,42,.5)}
+.zb-mask{position:absolute;inset:0;background:rgba(10,14,20,.55);backdrop-filter:blur(2px)}
 .zb-panel{position:relative;width:min(1400px,94vw);height:min(92vh,940px);
  min-width:420px;min-height:320px;
  background:var(--bg);border-radius:14px;display:flex;flex-direction:column;
@@ -103,13 +118,14 @@ button.zo{padding:2px 9px;font-size:11px}
 @media (hover:none){.zhint{display:none}}
 .zb table{border-collapse:collapse;font-size:12px;background:var(--card);width:100%}
 .zb th,.zb td{border:1px solid var(--line);padding:5px 10px;white-space:nowrap}
-.zb th{position:sticky;top:0;background:#F1EFE8;text-align:left;z-index:1}
+.zb th{position:sticky;top:0;background:var(--th);text-align:left;z-index:1}
 .zb td.n,.zb th.n{text-align:right;font-variant-numeric:tabular-nums}
-.zb tbody tr:nth-child(even){background:#FAFAF8}
+.zb tbody tr:nth-child(even){background:var(--row_alt)}
 .zb .empty{padding:28px}
 
 @media (max-width:1080px){.chart-card{grid-column:span 12}}
-@media print{button.dl{display:none}.wrap{max-width:none;padding:0}.zb{display:none}}
+@media print{button.dl{display:none}.wrap{max-width:none;padding:0}.zb{display:none}
+ body{background:#fff;background-image:none}}
 """
 
 JS = r"""
@@ -126,6 +142,26 @@ function _esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').rep
 var zbInst = null, zbCur = -1;
 
 function _clone(o){ return JSON.parse(JSON.stringify(o)); }
+
+/* ---------------- 深浅主题现场切换 ----------------
+   两套 option（OPTS_L / OPTS_D）随页下发，切换只是给每个实例换一次
+   setOption(notMerge)，不回服务端重渲染 —— 看板发别人后也能切。
+   选择记在 localStorage('reportstudio.out.theme')；放大层开着时切主题，
+   当前那张图也要跟着换，不然弹层里留着旧底色很割裂。 */
+var _THEME_KEY='reportstudio.out.theme';
+function _outTheme(){return document.documentElement.getAttribute('data-theme')==='dark'?'dark':'light';}
+function _cardBg(){var v=getComputedStyle(document.documentElement).getPropertyValue('--card').trim();return v||'#fff';}
+function applyOutTheme(t,save){
+ t = (t==='dark'?'dark':'light');
+ document.documentElement.setAttribute('data-theme',t);
+ OPTS = (t==='dark'?OPTS_D:OPTS_L);
+ if(save!==false){try{localStorage.setItem(_THEME_KEY,t);}catch(e){}}
+ for(var i=0;i<CH.length;i++){ if(CH[i]) CH[i].setOption(_smallOpt(OPTS[i]),true); }
+ if(zbInst && zbCur>=0){ zbInst.setOption(_zoomOpt(OPTS[zbCur]),true); }
+ var b=document.getElementById('themeBtn');
+ if(b) b.textContent=(t==='dark'?'☀ 浅色':'☾ 深色');
+}
+function toggleOutTheme(){applyOutTheme(_outTheme()==='dark'?'light':'dark');}
 
 /* 网格小图的交互：Ctrl+滚轮缩放、左键拖拽平移（Google Maps 同款约定）。
    为什么用 Ctrl 修饰而不是直接滚轮：看板是长页面，滚轮的第一职责是翻页，
@@ -246,7 +282,7 @@ function renderZbTable(){
   t.columns.forEach(function(c){ h += '<th>' + _esc(c) + '</th>'; });
   h += '</tr></thead><tbody>';
   t.rows.forEach(function(r, i){
-    h += '<tr><td class="n" style="color:#8A8880">' + (i+1) + '</td>';
+    h += '<tr><td class="n" style="color:var(--ink3)">' + (i+1) + '</td>';
     r.forEach(function(v, j){
       var txt = _show(v);
       if (t.columns[j] === '占比' && typeof v === 'number') txt += '%';
@@ -261,7 +297,7 @@ function renderZbTable(){
 function zbSavePng(){
   if (!zbInst) return;
   var a = document.createElement('a');
-  a.href = zbInst.getDataURL({type:'png', pixelRatio:2, backgroundColor:'#fff'});
+  a.href = zbInst.getDataURL({type:'png', pixelRatio:2, backgroundColor:_cardBg()});
   a.download = _safe(TITLES[zbCur] || 'chart') + '.png';
   a.click();
 }
@@ -420,9 +456,9 @@ _JS_TAIL = r"""
 function dlChart(i){
  var el=document.getElementById('chart'+i);
  var c=echarts.getInstanceByDom(el);if(!c)return;
- var url=c.getDataURL({type:'png',pixelRatio:2,backgroundColor:'#fff'});
+ var url=c.getDataURL({type:'png',pixelRatio:2,backgroundColor:_cardBg()});
  var a=document.createElement('a');a.href=url;
- a.download=_safe(el.previousElementSibling.firstElementChild.textContent)+'.png';
+ a.download=_safe(el.closest('.chart-card').querySelector('.hd span').textContent)+'.png';
  a.click();}
 """
 
@@ -458,6 +494,11 @@ def norm_span(v) -> int:
     except (TypeError, ValueError):
         return 6
     return n if n in SPANS else 6
+
+
+def _block_opt(b: dict, which: str) -> dict:
+    opts = b.get("options") or {}
+    return opts.get(which) or b.get("option") or {}
 
 
 def chart_table(option: dict, x_name: str = "") -> dict:
@@ -520,27 +561,31 @@ def chart_table(option: dict, x_name: str = "") -> dict:
 def build_dashboard_html(title: str, subtitle: str, datasets: list[Dataset],
                          chart_blocks: list[dict], metric_cards: list[dict],
                          missing: list[str], vendor_path: str,
-                         dash_id: str = "") -> str:
+                         dash_id: str = "", theme: str = "light") -> str:
     """拼出看板 HTML。
 
-    chart_blocks 的每项要带 option / title / span / height；
-    missing 是「看板里引用了、但当前会话里找不到」的数据表名字 ——
-    这种情况必须明说，否则看板会安静地少几张图，没人知道为什么。
+    chart_blocks 的每项要带 options（{light, dark} 两套）/ option（初版）/
+    title / span / height；missing 是「看板里引用了、但当前会话里找不到」的
+    数据表名字 —— 这种情况必须明说，否则看板会安静地少几张图，没人知道为什么。
     dash_id 用于把「每张图的自由缩放尺寸」绑到这份看板上：常驻看板传真实 id，
     预览页传 "_preview"，拷出去的单文件传 "_standalone"。拖完之后尺寸会落回
     这份 id 对应的 localStorage（且常驻看板还会写回后端，重新渲染也记得）。
+    theme 是打开时的初始主题（跟随工作台当前主题）；页内仍可现场切换，
+    切换记录优先于初值 —— 单文件发出去后收的人自己说了算。
     """
+    theme = T.norm(theme)
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     sources = "、".join(d.name for d in datasets) or "（无）"
 
     parts: list[str] = []
-    parts.append(f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+    parts.append(f"""<!DOCTYPE html><html lang="zh-CN" data-theme="{theme}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{_esc(title)}</title><style>{CSS}</style></head><body><div class="wrap">
 <header><div><h1>{_esc(title)}</h1>
 <div class="sub">{_esc(subtitle) if subtitle else ""}
 刷新时间 {now} ｜ 数据来源：{_esc(sources)}</div></div>
 <div class="grow"></div>
+<button class="dl" id="themeBtn" onclick="toggleOutTheme()">{'☀ 浅色' if theme == 'dark' else '☾ 深色'}</button>
 <button class="dl" onclick="fs()">全屏</button>
 <button class="dl" onclick="window.print()">打印 / 存 PDF</button>
 </header>""")
@@ -610,16 +655,19 @@ def build_dashboard_html(title: str, subtitle: str, datasets: list[Dataset],
     parts.append(_echarts_tag(vendor_path))
     parts.append("<script>")
 
-    # option 只序列化一次，小图和放大层共用 —— 存两份既浪费内存，
-    # 又埋下「图上是 A、表里是 B」的隐患。
+    # option 双主题各序列化一份；数据表(TABLES)从浅色版反解 —— 两套的
+    # 数值本来就相同（只有颜色不同），不必解两遍。
     titles = [_js_data(b.get("title") or f"图表 {i + 1}")
               for i, b in enumerate(chart_blocks)]
-    opts = [_js_data(b.get("option") or {}) for b in chart_blocks]
-    tables = [_js_data(chart_table(b.get("option") or {}, b.get("x") or ""))
+    opts_l = [_js_data(_block_opt(b, "light")) for b in chart_blocks]
+    opts_d = [_js_data(_block_opt(b, "dark")) for b in chart_blocks]
+    tables = [_js_data(chart_table(_block_opt(b, "light"), b.get("x") or ""))
               for b in chart_blocks]
     parts.append("var DASH_ID=" + _js_data(dash_id or "") + ";")
     parts.append("var TITLES=[" + ",".join(titles) + "];")
-    parts.append("var OPTS=[" + ",".join(opts) + "];")
+    parts.append("var OPTS_L=[" + ",".join(opts_l) + "];")
+    parts.append("var OPTS_D=[" + ",".join(opts_d) + "];")
+    parts.append("var OPTS=(document.documentElement.getAttribute('data-theme')==='dark'?OPTS_D:OPTS_L);")
     parts.append("var TABLES=[" + ",".join(tables) + "];")
     parts.append("var CH=[];")   # 每张图的 echarts 实例，缩放后好调 resize()
 
@@ -631,5 +679,8 @@ def build_dashboard_html(title: str, subtitle: str, datasets: list[Dataset],
 
     parts.append(_JS_TAIL)
     parts.append(JS)
+    # 打开过、上次现场切过主题 → 认用户自己的选择
+    parts.append("try{var _st=localStorage.getItem(_THEME_KEY);"
+                 "if(_st&&_st!==_outTheme())applyOutTheme(_st,false);}catch(e){}")
     parts.append("</script></body></html>")
     return "".join(parts)

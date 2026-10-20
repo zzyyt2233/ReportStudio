@@ -1,20 +1,51 @@
-"""Spec + 聚合结果 → ECharts option。商务浅色风格。"""
+"""Spec + 聚合结果 → ECharts option。配色统一从 core.render.theme 取。"""
 
 from __future__ import annotations
 
 from ..model import ChartSpec
+from . import theme as T
 
-PALETTE = [
-    "#378ADD", "#1D9E75", "#EF9F27", "#7F77DD",
-    "#E24B4A", "#5DCAA5", "#888780", "#D4537E",
-]
+# 保留导出名：tests 与旧调用方按 PALETTE 引用浅色色板。
+PALETTE = T.PALETTE["light"]
 
-BASE = {
-    "textStyle": {"fontFamily": "Microsoft YaHei, PingFang SC, system-ui, sans-serif"},
-    "grid": {"left": 60, "right": 40, "top": 60, "bottom": 60, "containLabel": True},
-    "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
-    "legend": {"top": 8, "textStyle": {"color": "#444441"}},
-}
+TEXT_STYLE = {"fontFamily": "Microsoft YaHei, PingFang SC, system-ui, sans-serif"}
+GRID = {"left": 60, "right": 40, "top": 60, "bottom": 60, "containLabel": True}
+
+
+def _theme_parts(theme: str) -> dict:
+    """把一次渲染要用的主题色收拢成局部字典，避免满篇 T.echart_colors(...) 查表。"""
+    t = T.norm(theme)
+    c = T.echart_colors(t)
+    return {"name": t, "palette": T.palette(t), "anom": T.tokens(t)["anom"], **c}
+
+
+def _toolbox(th: dict, ctype: str) -> dict:
+    """右上角工具：保存图片、框选缩放、还原。
+
+    饼图没有轴，dataZoom 框选对它无意义，就不放（放上去点了没反应更迷惑）。
+    saveAsImage 的底色跟主题卡片色一致 —— 深色看板截出来不该带一块白边。
+    """
+    feature: dict = {
+        "saveAsImage": {"title": "保存图片", "pixelRatio": 2,
+                        "backgroundColor": T.card_bg(th["name"])},
+    }
+    if ctype not in ("pie",):
+        feature["dataZoom"] = {"title": {"zoom": "框选缩放", "back": "还原缩放"}}
+        feature["restore"] = {"title": "还原"}
+    return {
+        "right": 12, "top": 4, "itemSize": 14, "itemGap": 8,
+        "iconStyle": {"borderColor": th["icon_border"], "color": th["icon"]},
+        "emphasis": {"iconStyle": {"borderColor": th["text"], "color": th["text"]}},
+        "feature": feature,
+    }
+
+
+def _tooltip(th: dict, base: dict | None = None) -> dict:
+    tip = dict(base or {"trigger": "axis", "axisPointer": {"type": "shadow"}})
+    tip["backgroundColor"] = th["tooltip_bg"]
+    tip["borderColor"] = th["tooltip_border"]
+    tip["textStyle"] = {"color": th["tooltip_text"]}
+    return tip
 
 
 def _yname(name: str, unit: str) -> str:
@@ -50,27 +81,34 @@ def _only_pct(agg: dict, names: list[str]) -> bool:
     return bool(names) and all(_unit_of(agg, n) == "%" for n in names)
 
 
-def build_option(agg: dict, spec: ChartSpec) -> dict:
+def build_option(agg: dict, spec: ChartSpec, theme: str = "light") -> dict:
+    th = _theme_parts(theme)
     opt: dict = {
-        "color": PALETTE,
-        "textStyle": BASE["textStyle"],
-        "tooltip": BASE["tooltip"],
-        "legend": BASE["legend"],
+        "color": th["palette"],
+        "textStyle": TEXT_STYLE,
+        "tooltip": _tooltip(th),
+        "legend": {"top": 8, "textStyle": {"color": th["text"]}},
     }
     unit = agg.get("unit", "") or ""
     # 实际用哪种图，以 analyze.aggregate 的决策为准（饼图遇负值会被降级成柱状图）。
     # 渲染层只负责画，不自己判断 —— 两处各自判断必然会有一处漏改。
     ctype = agg.get("effective_type") or spec.type
+    opt["toolbox"] = _toolbox(th, ctype)
 
     if ctype == "scatter":
-        opt["grid"] = BASE["grid"]
-        opt["tooltip"] = {"trigger": "item"}
+        opt["grid"] = GRID
+        opt["tooltip"] = _tooltip(th, {"trigger": "item"})
         opt["xAxis"] = {"type": "value", "name": spec.x,
-                        "axisLine": {"lineStyle": {"color": "#B4B2A9"}}}
+                        "nameTextStyle": {"color": th["text"]},
+                        "axisLabel": {"color": th["axis_label"]},
+                        "axisLine": {"lineStyle": {"color": th["axis_line"]}}}
         opt["yAxis"] = {"type": "value",
                         "name": _yname(spec.y[0] if spec.y else "",
                                        _unit_of(agg, spec.y[0] if spec.y else "")),
-                        "axisLine": {"lineStyle": {"color": "#B4B2A9"}}}
+                        "nameTextStyle": {"color": th["text"]},
+                        "axisLabel": {"color": th["axis_label"]},
+                        "splitLine": {"lineStyle": {"color": th["split"]}},
+                        "axisLine": {"lineStyle": {"color": th["axis_line"]}}}
         opt["series"] = [{"type": "scatter", "name": spec.y[0] if spec.y else "",
                           "data": agg["series"][0]["data"] if agg["series"] else [],
                           "symbolSize": 10}]
@@ -88,27 +126,30 @@ def build_option(agg: dict, spec: ChartSpec) -> dict:
             for i, (n, v) in enumerate(zip(agg["categories"], agg["series"][0]["data"])):
                 item = {"name": n, "value": scale(v)}
                 if i in anom_idx:
-                    item["itemStyle"] = {"color": "#E24B4A"}
+                    item["itemStyle"] = {"color": th["anom"]}
                 data.append(item)
-        opt["tooltip"] = {"trigger": "item", "formatter": "{b}: {c} ({d}%)"}
-        opt["legend"] = {"top": 8, "type": "scroll", "textStyle": {"color": "#444441"}}
+        opt["tooltip"] = _tooltip(th, {"trigger": "item",
+                                       "formatter": "{b}: {c} ({d}%)"})
+        opt["legend"] = {"top": 8, "type": "scroll",
+                         "textStyle": {"color": th["text"]}}
         opt["series"] = [{
             "type": "pie",
             "radius": ["38%", "65%"],
             "center": ["50%", "58%"],
             "name": spec.y[0] if spec.y else "",
             "data": data,
-            "label": {"formatter": "{b}\n{d}%", "color": "#444441"},
-            "itemStyle": {"borderColor": "#fff", "borderWidth": 2},
+            "label": {"formatter": "{b}\n{d}%", "color": th["text"]},
+            "itemStyle": {"borderColor": T.card_bg(th["name"]), "borderWidth": 2},
         }]
         return opt
 
-    opt["grid"] = BASE["grid"]
+    opt["grid"] = GRID
     opt["xAxis"] = {
         "type": "category",
         "data": agg["categories"],
-        "axisLabel": {"color": "#5F5E5A", "rotate": 30 if len(agg["categories"]) > 8 else 0},
-        "axisLine": {"lineStyle": {"color": "#B4B2A9"}},
+        "axisLabel": {"color": th["axis_label"],
+                      "rotate": 30 if len(agg["categories"]) > 8 else 0},
+        "axisLine": {"lineStyle": {"color": th["axis_line"]}},
     }
     # 百分比列底层存的是小数(0.125)，轴上乘回 100 显示成 12.5%；轴标签用 {value}% 拼接
     # 哪些指标落在左轴、哪些落在右轴，先分好 —— 轴名和「要不要加 % 后缀」都取决于它
@@ -120,15 +161,17 @@ def build_option(agg: dict, spec: ChartSpec) -> dict:
     y_axes = [{
         "type": "value",
         "name": _axis_name(agg, left_names) or _yname(spec.y[0] if spec.y else "", unit),
-        "axisLabel": {"color": "#5F5E5A",
+        "nameTextStyle": {"color": th["text"]},
+        "axisLabel": {"color": th["axis_label"],
                       "formatter": "{value}%" if _only_pct(agg, left_names) else None},
-        "splitLine": {"lineStyle": {"color": "#F1EFE8"}},
+        "splitLine": {"lineStyle": {"color": th["split"]}},
     }]
     if spec.dual_axis and n_all > 1:
         y_axes.append({
             "type": "value",
             "name": _axis_name(agg, right_names),
-            "axisLabel": {"color": "#5F5E5A",
+            "nameTextStyle": {"color": th["text"]},
+            "axisLabel": {"color": th["axis_label"],
                           "formatter": "{value}%" if _only_pct(agg, right_names) else None},
             "splitLine": {"show": False},
         })
@@ -152,7 +195,7 @@ def build_option(agg: dict, spec: ChartSpec) -> dict:
         for di, v in enumerate(s["data"]):
             disp = scale(v)
             if di in anom_idx:
-                data.append({"value": disp, "itemStyle": {"color": "#E24B4A"}})
+                data.append({"value": disp, "itemStyle": {"color": th["anom"]}})
             else:
                 data.append(disp)
         one: dict = {
@@ -166,7 +209,7 @@ def build_option(agg: dict, spec: ChartSpec) -> dict:
             # 红色「异」标注钉在异常点上方，和柱体/折线的红点呼应
             one["markPoint"] = {
                 "symbol": "pin", "symbolSize": 34,
-                "itemStyle": {"color": "#E24B4A"},
+                "itemStyle": {"color": th["anom"]},
                 "label": {"color": "#fff", "fontSize": 10},
                 "data": [{"coord": [agg["categories"][ai], scale(s["data"][ai])],
                           "value": "异"} for ai in anom_idx],
@@ -177,10 +220,20 @@ def build_option(agg: dict, spec: ChartSpec) -> dict:
             if stacked:
                 one["stack"] = "total"
         if stype == "line":
-            one["smooth"] = False
+            one["smooth"] = True
             one["symbolSize"] = 6
             if area:
                 one["areaStyle"] = {"opacity": 0.18}
         series.append(one)
     opt["series"] = series
     return opt
+
+
+def build_option_pair(agg: dict, spec: ChartSpec) -> dict:
+    """一次产出深浅两套 option。
+
+    报告 / 看板是发给别人看的自包含单文件，切主题不能回服务端重渲 ——
+    option 里只有数据没有图片资源，双份的体积代价很小，换来回看时随意切换。
+    """
+    return {"light": build_option(agg, spec, "light"),
+            "dark": build_option(agg, spec, "dark")}

@@ -124,9 +124,12 @@ def test_persist_is_not_snapshot(client) -> None:
 
 
 def _arrays(html: str) -> dict:
-    """把看板 HTML 里注入的 TITLES / OPTS / TABLES 三个数组解出来。"""
+    """把看板 HTML 里注入的 TITLES / OPTS_L / OPTS_D / TABLES 数组解出来。
+
+    双主题改版：OPTS 不再是字面数组，而是按初值指向 OPTS_L / OPTS_D 之一，
+    所以这里解的是两套 option。"""
     out = {}
-    for name in ("TITLES", "OPTS", "TABLES"):
+    for name in ("TITLES", "OPTS_L", "OPTS_D", "TABLES"):
         m = re.search(r"var " + name + r"=(\[.*?\]);", html, re.S)
         out[name] = json.loads(m.group(1)) if m else None
     return out
@@ -175,10 +178,11 @@ def test_zoom_and_data_table(client) -> None:
            "_smallOpt(OPTS[0])" in html)
 
         arr = _arrays(html)
-        ok("三个数组都注入成功", all(arr[k] is not None for k in arr), str(list(arr)))
+        ok("四组数组都注入成功", all(arr[k] is not None for k in arr), str(list(arr)))
         ok("图的份数与数组长度一致",
-           len(arr["OPTS"]) == 2 and len(arr["TABLES"]) == 2 and len(arr["TITLES"]) == 2,
-           f'{len(arr["OPTS"])}/{len(arr["TABLES"])}/{len(arr["TITLES"])}')
+           len(arr["OPTS_L"]) == 2 and len(arr["OPTS_D"]) == 2
+           and len(arr["TABLES"]) == 2 and len(arr["TITLES"]) == 2,
+           f'{len(arr["OPTS_L"])}/{len(arr["TABLES"])}/{len(arr["TITLES"])}')
 
         t0 = arr["TABLES"][0]
         ok("直角坐标图：首列是横轴列名", t0["columns"][0] == "省份", str(t0["columns"]))
@@ -186,7 +190,7 @@ def test_zoom_and_data_table(client) -> None:
            t0["columns"][1:] == ["销售额", "订单量"], str(t0["columns"]))
         ok("直角坐标图：5 个类目 5 行", len(t0["rows"]) == 5, str(len(t0["rows"])))
         # 表格里的数必须和图上的数一致：这是这个功能唯一不能错的地方
-        onpic = arr["OPTS"][0]["series"][0]["data"]
+        onpic = arr["OPTS_L"][0]["series"][0]["data"]
         intable = [row[1] for row in t0["rows"]]
         ok("表里的数和画在图上的数完全一致", onpic == intable,
            f"图 {onpic} / 表 {intable}")
