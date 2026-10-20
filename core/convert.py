@@ -147,6 +147,12 @@ def _soffice_to_pdf(src: str, out: str, timeout: int = 180) -> bool:
         return os.path.exists(out) and os.path.getsize(out) > 0
     except Exception:
         return False
+    finally:
+        # 这个 profile 是我们自己临时要的，不该留在系统临时目录里 ——
+        # LibreOffice 一份 profile 起步就是几十 MB，转一百次就是几个 G。
+        # 代价是每次转换都重新初始化一次 profile（多几百毫秒），
+        # 换掉「用户没转文件却一直在占他系统盘」。
+        shutil.rmtree(profile, ignore_errors=True)
 
 
 def _file_uri(path: str) -> str:
