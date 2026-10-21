@@ -25,14 +25,24 @@ INK2 = "#5F5E5A"
 
 
 def _setup_font():
-    """中文字体。系统缺微软雅黑时退回黑体，再不行就用默认（方框总比崩掉强）。"""
+    """中文字体：装了什么就用什么，一个都没有就退回 matplotlib 的默认字体。
+
+    原来找不到时硬写 `["Microsoft YaHei"]` —— 那正是「这台机器上没这个字体」
+    的情况下必然不存在的一个家族。matplotlib 于是每画一个字都要 findfont 一次、
+    失败一次、警告一次：CI 的 ubuntu 腿上一次出图刷出上千行 findfont 警告，
+    出图时间也被拖到客户端 120 秒超时。
+    现在补上 Linux 常见的几种开源中文字体，最后兜到 DejaVu Sans ——
+    没装中文字体的环境里中文照样是方框（以前也是，只是被警告淹没），
+    但不再逐字报错，也不再把报告拖死。
+    """
     avail = {f.name for f in matplotlib.font_manager.fontManager.ttflist}
-    for cand in ("Microsoft YaHei", "SimHei", "DengXian", "KaiTi", "SimSun"):
+    for cand in ("Microsoft YaHei", "SimHei", "DengXian", "KaiTi", "SimSun",
+                 "Noto Sans CJK SC", "Source Han Sans SC", "WenQuanYi Zen Hei"):
         if cand in avail:
-            plt.rcParams["font.sans-serif"] = [cand]
+            plt.rcParams["font.sans-serif"] = [cand, "DejaVu Sans"]
             break
     else:
-        plt.rcParams["font.sans-serif"] = ["Microsoft YaHei"]
+        plt.rcParams["font.sans-serif"] = ["DejaVu Sans"]
     plt.rcParams["axes.unicode_minus"] = False
 
 

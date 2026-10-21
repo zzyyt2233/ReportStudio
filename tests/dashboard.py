@@ -79,7 +79,12 @@ def test_save_and_render(client) -> None:
         ok("没有缺表", r.get("missing") == [], str(r.get("missing")))
 
         path = r.get("path") or ""
-        ok("HTML 落在 E 盘", path.startswith("E:"), path)
+        # 钉的是「产物落在项目自己目录下」，不是某个盘符。盘符是这台机器的部署习惯，
+        # CI 的 ubuntu 腿跑在 /home/runner 下，按 E: 断言每次必红 ——
+        # 而红了既不能说明文件写错地方，也不能说明产品坏了。
+        ok("HTML 落在项目目录下",
+           os.path.normcase(os.path.abspath(path)).startswith(
+               os.path.normcase(ROOT) + os.sep), path)
         ok("HTML 存在且体积合理",
            os.path.isfile(path) and os.path.getsize(path) > 1000,
            f"{os.path.getsize(path) if os.path.exists(path) else 0} B")
@@ -414,7 +419,7 @@ def main() -> int:
     real = os.path.normcase(os.path.join(ROOT, "dashboards"))
     here = os.path.normcase(dashboards_dir())
     ok("看板落在隔离目录，不碰真实的 dashboards/", here != real, here)
-    ok("隔离目录在 E 盘 temp 下",
+    ok("隔离目录在项目 temp 下",
        here.startswith(os.path.normcase(os.path.join(ROOT, "temp"))), here)
 
     test_save_and_render(client)

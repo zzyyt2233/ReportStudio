@@ -103,17 +103,22 @@ CHART_BODY = {
 }
 
 
-def heavy_generate(did: str) -> float:
+def heavy_generate(did: str, tag: str = "") -> float:
     """跑一次真实的多图报告生成，返回耗时。
 
     注意 y 必须是**列表**：ChartSpec.y 的类型是 list[str]，传字符串会被
     build_blocks 当成「没有有效指标」，一张图都不画，generate 0.1 秒就跑完 ——
     那样测出来的延迟毫无意义（这个坑踩过一次）。
+
+    tag 非空就当场报这一发的耗时：CI 上曾经整发请求撞上 120 秒超时，
+    而原来所有计时都攒在最后几行 print 里，日志看不出时间花在哪一发。
     """
     body = dict(CHART_BODY, dataset_ids=[did])
     t0 = time.perf_counter()
     j = post("/api/generate", body)
     dt = time.perf_counter() - t0
+    if tag:
+        print(f"    {tag}：出图 {dt:.1f}s", flush=True)
     if not j.get("ok") or not j.get("charts"):
         raise SystemExit(
             f"generate 没出图（ok={j.get('ok')} charts={j.get('charts')} "
@@ -138,13 +143,15 @@ def main() -> None:
     proc = start_server()
     did = ""
     try:
+        t0 = time.perf_counter()
         r = post("/api/paste", {"text": _build_payload(), "name": "并发测试数据"})
         did = r["dataset"]["id"]
-        print(f"样本数据表：{did}（{ROWS} 行）\n")
+        print(f"样本数据表：{did}（{ROWS} 行），导入 {time.perf_counter() - t0:.1f}s\n",
+              flush=True)
 
         # 预热：第一次出图要付 matplotlib 字体缓存的代价，不算进基线
-        heavy_generate(did)
-        print("预热完成（字体缓存已建立）\n")
+        heavy_generate(did, "预热")
+        print("预热完成（字体缓存已建立）\n", flush=True)
 
         # 1) 空载延迟
         idle: list[float] = []
@@ -161,7 +168,8 @@ def main() -> None:
         stop = threading.Event()
         th = threading.Thread(target=light_probe, args=(stop, busy))
         th.start()
-        lasts = [heavy_generate(did) for _ in range(ROUNDS)]
+        lasts = [heavy_generate(did, f"计测第{i + 1}/{ROUNDS}轮")
+                 for i in range(ROUNDS)]
         time.sleep(0.3)
         stop.set()
         th.join()
@@ -178,8 +186,9 @@ def main() -> None:
         # 3) 两个重活是否真并行
         results: list[float] = []
         t0 = time.perf_counter()
-        threads = [threading.Thread(target=lambda: results.append(heavy_generate(did)))
-                   for _ in range(2)]
+        threads = [threading.Thread(
+            target=lambda i=i: results.append(heavy_generate(did, f"并行第{i + 1}发")))
+            for i in range(2)]
         for t in threads:
             t.start()
         for t in threads:

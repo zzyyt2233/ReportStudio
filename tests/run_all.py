@@ -203,8 +203,18 @@ def main() -> int:
             print(f"\n--- {name} ---")
             print(f"  末行: {tail[:160]}")
             lines = [ln for ln in full.strip().splitlines() if ln.strip()]
-            for ln in lines[-18:]:
-                print("   " + ln[:160])
+            # 连续重复的行压成一条。matplotlib 缺字体时能连刷几十行一模一样的
+            # findfont 警告，原来那 18 行的窗口被它整个占满 —— 真正的报错
+            # （哪条断言没中、哪个调用超时、栈里是 tests/ 的哪一行）被挤出视野，
+            # CI 红了也看不出红在哪，只能靠下载日志包猜。
+            uniq: list[list] = []
+            for ln in lines:
+                if uniq and ln == uniq[-1][0]:
+                    uniq[-1][1] += 1
+                else:
+                    uniq.append([ln, 1])
+            for ln, n in uniq[-30:]:
+                print(f"   {ln[:160]}" + (f"   ⟲ 连续重复 {n} 行" if n > 1 else ""))
         return 1
     print(f"全部 {len(results)} 套回归通过 ✅")
     return 0

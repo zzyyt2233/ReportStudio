@@ -430,15 +430,16 @@ def test_no_5xx(client, db: str) -> None:
             client.delete(f"/api/db/connections?name={c['name']}")
 
 
-def test_sqlite_purity() -> None:
-    hr("8 · 产物落盘位置：库文件与配置都必须在 E 盘")
+def test_store_stays_in_project() -> None:
+    hr("8 · 产物落盘位置：连接配置必须在项目自己目录下")
+    # 这里原来断言的是 startswith("E:") —— 盘符是这台机器的部署习惯，不是产品行为。
+    # CI 的 ubuntu 腿跑在 /home/runner 下，那条断言每次必红，红了也说明不了东西写错地方。
+    # 真正要守的是「别把用户的连接配置写到项目外面去」，那跟装在哪个盘无关。
     from core.db.store import _path as conn_path
-    p = conn_path()
-    check(os.path.abspath(p).upper().startswith("E:"),
-          f"连接配置存在 {p}")
     from _helpers import ROOT as R
-    check(os.path.abspath(R).upper().startswith("E:"),
-          f"项目根在 {R}")
+    root = os.path.normcase(os.path.abspath(R)) + os.sep
+    p = os.path.normcase(os.path.abspath(conn_path()))
+    check(p.startswith(root), f"连接配置 {p} 落在项目目录 {root} 之内")
 
 
 # ═══════════════════════ main ═══════════════════════
@@ -460,7 +461,7 @@ def main() -> int:
             iso.track(d["id"])
         test_no_5xx(client, db)
 
-    test_sqlite_purity()
+    test_store_stays_in_project()
 
     print("\n" + "=" * 66)
     if FAILS:
