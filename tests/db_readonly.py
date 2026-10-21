@@ -307,12 +307,21 @@ def test_api(db: str, client) -> None:
 
         # 回归：报告注册表曾经直接拿路径字符串当键，`E:\a\b` 和 `E:/a/b` 会算成
         # 两份不同的报告 —— 调用方把分隔符换个写法，导出就报「报告已过期」，
-        # 而这跟「真的过期」长得一模一样，极难排查。现在键做了归一化。
-        alt = gen_dir.replace("\\", "/") if "\\" in gen_dir else gen_dir.replace("/", "\\")
+        # 而这跟「真的过期」长得一模一样，极难排查。现在键走
+        # os.path.normcase(os.path.normpath(...))。
+        # 「同一个目录的另一种写法」必须按平台选：Windows 上 \ 和 / 等价，
+        # POSIX 上反斜杠只是普通的文件名字符、normpath 根本不动它 ——
+        # 原来无条件把 / 全换成 \，在 ubuntu 上造出来的是一个不存在的文件名，
+        # 这条断言于是每次必红，而红了跟注册表归一化没半点关系。
+        if os.altsep:                       # Windows：换一种分隔符
+            alt = gen_dir.replace(os.sep, os.altsep)
+        else:                               # POSIX：加一段 normpath 会吃掉的 "./"
+            alt = gen_dir + os.sep + "."
         if alt != gen_dir:
             e2 = client.post("/api/export", json={"kind": "docx", "dir": alt}).json()
             check(e2.get("ok") is True,
-                  "换个分隔符写法的 dir 也能命中同一份报告（注册表键已归一化）"
+                  "换个写法（" + ("分隔符" if os.altsep else "尾部 ./") +
+                  "）的 dir 也能命中同一份报告（注册表键已归一化）"
                   + ("" if e2.get("ok") else f"：{e2.get('error')}"))
 
 
