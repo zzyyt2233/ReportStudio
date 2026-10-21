@@ -1,0 +1,21 @@
+# 跑回归才需要的包，服务本身不依赖 —— 所以不放 requirements.txt，
+# 免得按文档装运行依赖的人多装一个用不上的 HTTP 客户端。
+#
+# 装法：python -m pip install -r requirements-dev.txt
+#
+# httpx2 是 starlette TestClient 的硬要求：tests/ 里十几套都从
+# `from fastapi.testclient import TestClient` 起步，而 starlette 只把它列成
+# 可选 extra（`httpx2>=2.0.0; extra == "full"`），pip 装 fastapi 时不会带进来。
+# 缺它时那句 import 直接抛
+#   RuntimeError: The starlette.testclient module requires the httpx2 package...
+# CI 四条腿曾经同时红在第 9 步（全量回归），红的就是这十几套里的同一个报错，
+# 跟被测代码一点关系没有。本地感觉不到，是因为老环境里的 starlette 还接受
+# 已经废弃的 `httpx`（那条路径只发 DeprecationWarning）。
+#
+# tools/check_declared_deps.py 挡不住这类问题：它只看项目代码的顶层 import，
+# 而 httpx2 是被 fastapi.testclient 间接要求的第三方包内部依赖。所以这条
+# 清单靠 tests/run_all.py 开头的一次探测兜底 —— 缺包时第一行就把原因说清楚。
+httpx2>=2.0.0
+
+# 前端那 100 项断言不在 Python 里：靠 node + jsdom 跑 tests/frontend_logic.js。
+# 不装 run_all 会跳过那一套（CI 里对应 `npm install --no-save jsdom`）。

@@ -8,6 +8,9 @@
     .venv\\Scripts\\python.exe tests/run_all.py --quick   # 跳过最慢的 no500
     .venv\\Scripts\\python.exe tests/run_all.py db_readonly frontend_logic
 
+跑之前要先装回归专用依赖：`pip install -r requirements-dev.txt`。
+它不在 requirements.txt 里（服务本身不需要），缺了开头那次探测会直接说清楚。
+
 注意：所有套件都做了「不破坏用户数据」的处理 —— 只删自己建的表，
 不会把你在界面上存着的会话数据清掉。
 """
@@ -130,11 +133,37 @@ def run_one(run: list[str], timeout: int = 900) -> tuple[bool, str, str, float]:
         return False, "", f"超时（>{timeout}s）", time.time() - t0
 
 
+def probe_test_client(py: str) -> tuple[bool, str]:
+    """先探一次 `from fastapi.testclient import TestClient` 能不能成。
+
+    tests/ 里十几套都从这句起步，而 starlette 把它要的那个包只列成可选 extra，
+    `pip install -r requirements.txt` 不会带进来。缺包时不探的话，这十几套各自
+    抛同一个 RuntimeError，汇总看着像代码坏了 —— 探一次就把原因说成一句话。
+    这类问题 tools/check_declared_deps.py 挡不住：它只看项目代码的顶层 import。
+    """
+    code = (
+        "import sys\n"
+        "try:\n"
+        "    from fastapi.testclient import TestClient\n"
+        "except Exception as e:\n"
+        "    print(type(e).__name__ + ': ' + (str(e).strip().splitlines() or [''])[0])\n"
+        "    sys.exit(1)\n"
+    )
+    r = subprocess.run([py, "-c", code], cwd=ROOT, capture_output=True, timeout=120)
+    return r.returncode == 0, (r.stdout or b"").decode("utf-8", "replace").strip()
+
+
 def main() -> int:
     quick = "--quick" in sys.argv
     picked = [a for a in sys.argv[1:] if not a.startswith("--")]
     py = sys.executable
     node = find_node()
+
+    ready, why = probe_test_client(py)
+    if not ready:
+        print(f"回归跑不了：TestClient 导入失败 → {why}")
+        print("先装回归专用依赖：.venv\\Scripts\\python.exe -m pip install -r requirements-dev.txt")
+        return 1
 
     results: list[tuple[str, bool, float, str, str]] = []
     for name, cmd, slow in SUITES:

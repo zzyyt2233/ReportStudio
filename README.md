@@ -17,6 +17,7 @@
 - 示例数据在 clone 后生成一次即可：`python samples/make_samples.py`，产出 Excel、Word、PDF、图片、CSV、SQLite、Markdown 八份样例。
 - 降级报告的说明按实际情况写清：片段太少的短文本、没接模型时的扫描图片、表里确实没有数值列、或裁掉了 scikit-learn 的长文本这四种才会走降级；缺 scikit-learn 时只是少一张主题分布图，报告照常出，不会报错。
 - 新增两个只读工具：`tools/list_dashboards.py` 列出已有看板各自用到哪些数据表，`tools/export_site.py` 把一个看板导成可发布的静态快照，默认取仓库自带的示例库，避免把真实业务数据发出去。
+- 回归专用依赖单独列进 `requirements-dev.txt`：跑测试要用的那个 HTTP 客户端不再要求普通用户装，只装运行依赖也能正常用服务；缺它时 `tests/run_all.py` 开头一句话说清该补什么，而不是让十几套各自抛同一条报错。
 
 ## 启动
 
@@ -230,6 +231,12 @@ tests/                回归套件
 想先拿假数据试一遍功能：`.venv\Scripts\python.exe samples\make_samples.py`
 
 ## 测试
+
+跑之前先装回归专用依赖（服务本身不需要，所以没混进 `requirements.txt`）：
+
+```bat
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+```
 
 ```bat
 .venv\Scripts\python.exe tests\run_all.py          :: 跑全部

@@ -66,6 +66,11 @@ jobs:
           else
             pip install -r requirements.txt
           fi
+          # 回归专用依赖：tests/ 里十几套都用 fastapi 的 TestClient，而 starlette
+          # 只把它要的这个包列成可选 extra，pip 不会自动带 —— 漏装时四条腿会一起
+          # 红在第 9 步，报错是「TestClient 需要 xxx 包」，跟被测代码无关。
+          # 两档都要装：它不是数据库驱动，不影响上面 no-driver 的承诺。
+          pip install -r requirements-dev.txt
 
       - name: 确认驱动真的没装（no-driver）
         if: matrix.deps == 'no-driver'
