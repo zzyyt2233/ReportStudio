@@ -122,6 +122,23 @@ def find_node() -> str:
     return ""
 
 
+def _excerpt(text: str, n: int = 30) -> list[str]:
+    """取末尾 n 行，并把连续重复的行压成一条。
+
+    原来固定取末尾 18 行，而且不管内容：matplotlib 缺中文字体时能连刷几千行
+    只差一个字符的 Glyph 警告，把窗口整个占满，真正的报错（哪条断言没中、栈里
+    是 tests/ 的哪一行）反而看不见 —— CI 红了只能再下载日志包猜。
+    """
+    uniq: list[list] = []
+    for ln in [x for x in text.strip().splitlines() if x.strip()]:
+        if uniq and ln == uniq[-1][0]:
+            uniq[-1][1] += 1
+        else:
+            uniq.append([ln, 1])
+    return [f"   {ln[:160]}" + (f"   ⟲ 连续重复 {n_} 行" if n_ > 1 else "")
+            for ln, n_ in uniq[-n:]]
+
+
 def run_one(run: list[str], timeout: int = 900) -> tuple[bool, str, str, float]:
     t0 = time.time()
     try:
@@ -129,8 +146,13 @@ def run_one(run: list[str], timeout: int = 900) -> tuple[bool, str, str, float]:
         out = (r.stdout or b"").decode("utf-8", "replace")
         err = (r.stderr or b"").decode("utf-8", "replace")
         return r.returncode == 0, out, err, time.time() - t0
-    except subprocess.TimeoutExpired:
-        return False, "", f"超时（>{timeout}s）", time.time() - t0
+    except subprocess.TimeoutExpired as e:
+        # 被杀掉之前已经打出来的那部分必须留着：超时这套最怕的就是「什么都看不到」，
+        # 而套件通常正是把进度和计时打在这些行里（concurrency 就是靠它定位卡在哪一发）。
+        out = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else ""
+        err = (e.stderr or b"").decode("utf-8", "replace") if isinstance(e.stderr, bytes) else ""
+        return False, out, err + f"\n超时（>{timeout}s，上面是它被杀掉前打出来的部分）", \
+            time.time() - t0
 
 
 def probe_test_client(py: str) -> tuple[bool, str]:
@@ -165,7 +187,7 @@ def main() -> int:
         print("先装回归专用依赖：.venv\\Scripts\\python.exe -m pip install -r requirements-dev.txt")
         return 1
 
-    results: list[tuple[str, bool, float, str, str]] = []
+    results: list[tuple[str, bool, float, str, str, str]] = []
     for name, cmd, slow in SUITES:
         if picked and name not in picked:
             continue
@@ -192,29 +214,25 @@ def main() -> int:
             if line.strip():
                 tail = line.strip()
                 break
-        results.append((name, ok, dt, tail, out + "\n" + err))
+        results.append((name, ok, dt, tail, out, err))
         print(f"{name:<20} {'PASS' if ok else 'FAIL'}  {dt:5.1f}s  {tail[:64]}")
 
     bad = [r for r in results if not r[1]]
     print("\n" + "=" * 72)
     if bad:
         print(f"失败 {len(bad)} / {len(results)} 套：")
-        for name, _, _, tail, full in bad:
+        for name, _, _, tail, out, err in bad:
             print(f"\n--- {name} ---")
             print(f"  末行: {tail[:160]}")
-            lines = [ln for ln in full.strip().splitlines() if ln.strip()]
-            # 连续重复的行压成一条。matplotlib 缺字体时能连刷几十行一模一样的
-            # findfont 警告，原来那 18 行的窗口被它整个占满 —— 真正的报错
-            # （哪条断言没中、哪个调用超时、栈里是 tests/ 的哪一行）被挤出视野，
-            # CI 红了也看不出红在哪，只能靠下载日志包猜。
-            uniq: list[list] = []
-            for ln in lines:
-                if uniq and ln == uniq[-1][0]:
-                    uniq[-1][1] += 1
-                else:
-                    uniq.append([ln, 1])
-            for ln, n in uniq[-30:]:
-                print(f"   {ln[:160]}" + (f"   ⟲ 连续重复 {n} 行" if n > 1 else ""))
+            # 断言结果、计时、进度都打在标准输出，第三方库的警告都在标准错误。
+            # 混在一格里时，那几千行 Glyph 警告会把真正那几行挤出去 —— 分开取末尾。
+            print("  标准输出末尾（断言与计时在这里）：")
+            for ln in _excerpt(out):
+                print(ln)
+            if err.strip():
+                print("  标准错误末尾（第三方库的警告在这里）：")
+                for ln in _excerpt(err, 12):
+                    print(ln)
         return 1
     print(f"全部 {len(results)} 套回归通过 ✅")
     return 0

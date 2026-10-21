@@ -90,6 +90,21 @@ jobs:
         shell: bash
         run: npm install --no-save jsdom
 
+      - name: 装一个中文字体（ubuntu）
+        # 这个产品画的是中文报告，而 ubuntu runner 默认一个 CJK 字体都没有：
+        # matplotlib 里每个中文字都缺字形（几千行 Glyph 警告、出图拖到分钟级），
+        # 静态图只能出方框。在那种环境里跑出来的绿，是「在不会显示中文的机器上
+        # 测中文产品」的绿，说明不了用户会看到什么。装一个开源 CJK 字体，
+        # 正好把 core/render/static_chart.py 里 Linux 那条分支真跑一遍。
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          # 这一步顺便把 matplotlib 的字体缓存建起来（此时缓存里已经有新字体），
+          # 免得第一套回归把缓存构建的时间算进被测耗时。
+          python -c "import matplotlib.font_manager as fm; ns={f.name for f in fm.fontManager.ttflist if 'CJK' in f.name or 'Noto Sans' in f.name}; print('matplotlib 可见的 CJK 字体:', sorted(ns)[:8])"
+
       - name: 生成示例数据
         # samples/ 入库的只有生成器，八份样例（xlsx / docx / pdf / png / csv / db / md）
         # 全是跑出来的 —— .gitignore 里那条注释就写着「clone 后跑一次」。

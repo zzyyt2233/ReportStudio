@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import warnings
 
 import matplotlib
 
@@ -22,6 +23,9 @@ PALETTE = ["#378ADD", "#1D9E75", "#EF9F27", "#7F77DD",
 GRID = "#E5E3DC"
 INK = "#2C2C2A"
 INK2 = "#5F5E5A"
+
+
+_NO_CJK_WARNED = False
 
 
 def _setup_font():
@@ -43,6 +47,14 @@ def _setup_font():
             break
     else:
         plt.rcParams["font.sans-serif"] = ["DejaVu Sans"]
+        global _NO_CJK_WARNED
+        if not _NO_CJK_WARNED:
+            # 一句说明，替代成千上万行 "Glyph ... missing from font(s)"。
+            # 方框这件事本身改不了（机器里确实没有中文字体），但用户应该被明确
+            # 告知一次「为什么是方框、装什么能好」，而不是被警告刷屏。
+            _NO_CJK_WARNED = True
+            warnings.warn("本机没有可用的中文字体，静态图里的中文会画成方框；"
+                          "装上微软雅黑或 Noto Sans CJK 之类即可。", stacklevel=2)
     plt.rcParams["axes.unicode_minus"] = False
 
 
