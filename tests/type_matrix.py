@@ -28,6 +28,18 @@ from _helpers import datasets as _all_datasets  # noqa: E402
 SAMPLES = os.path.join(ROOT, "samples")
 client = TestClient(server.app)
 
+# 「主题分布」图的自动聚类需要 scikit-learn（core/tagger.py 里的延迟 import）。
+# CI 两档都按 requirements.txt 装着，但本机或裁过依赖的分发包可能没有 ——
+# 这条只决定 B2 该期望「出图」还是「降级」，两种情况都不许报错。
+# 用真实 import 探测而不是 find_spec：被 meta path 拦掉时 find_spec 抛的是
+# ModuleNotFoundError，而这里要的就是「到底能不能用」。
+def _has_sklearn() -> bool:
+    try:
+        import sklearn.cluster  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
 FAILS: list[str] = []
 
 # 用户原有的数据表基线：第一次清场时记下，之后永不删除。
@@ -195,11 +207,40 @@ g = generate({"dataset_ids": did, "merge_mode": "merge", "title": "无图片·�
               "template": "full", "charts": [], "metrics": []})
 check(bool(g.get("ok")), "只有文本时也能出报告，不报错")
 if g.get("ok"):
-    # 会议纪要.md 的正文够 4 段，自动补的「主题分布」图会顶上来，所以不再是降级报告。
-    # 降级分支由 B2b（三行短文本）负责验，两条路都要守着。
-    check(not g.get("degraded") and g.get("charts", 0) >= 1,
-          "长篇纯文本出主题分布图，不再打降级标记")
+    # 会议纪要.md 的正文够 4 段，装了 scikit-learn 时自动补的「主题分布」图会顶上来，
+    # 所以不再是降级报告；缺包时这张图本来就不该硬画（B2c 专门守那条）。
+    if _has_sklearn():
+        check(not g.get("degraded") and g.get("charts", 0) >= 1,
+              "长篇纯文本出主题分布图，不再打降级标记")
+    else:
+        check(bool(g.get("degraded")),
+              "没装 scikit-learn 时长文本走降级报告，而不是报错")
     check(os.path.exists(os.path.join(g["dir"], "report.html")), "只有文本时 HTML 已落盘")
+
+hr("B2c · 没装 scikit-learn 的环境里，长文本要降级而不是整份报告报错")
+# scikit-learn 是 core/tagger.py 里函数内的延迟 import，声明检查只看顶层 import，
+# 抓不到「必需却漏声明」这一类 —— CI 干净检出里 compat / type_matrix 就是这么红的。
+# 这里当场把缺包的环境造出来：宁可少一张主题图、走降级报告，也不能 500。
+# 要整棵 sklearn.* 一起摘掉：前面几节已经把子模块缓存进 sys.modules，
+# 只顶掉 'sklearn' 这一个键的话 `from sklearn.cluster import KMeans` 照样命中缓存，
+# 模拟出来的就是「装了」而不是「没装」。
+clear()
+_saved_sklearn = {k: v for k, v in sys.modules.items()
+                  if k == "sklearn" or k.startswith("sklearn.")}
+for _k in _saved_sklearn:
+    del sys.modules[_k]
+sys.modules["sklearn"] = None          # type: ignore[assignment]
+try:
+    did_ns = upload("会议纪要.md")
+    g = generate({"dataset_ids": did_ns, "merge_mode": "merge",
+                  "title": "缺 sklearn·降级", "template": "full",
+                  "charts": [], "metrics": []})
+    check(bool(g.get("ok")) and bool(g.get("degraded")),
+          "缺 scikit-learn 时不出主题图、明确标记降级，而不是报错")
+finally:
+    for _k in [k for k in sys.modules if k == "sklearn" or k.startswith("sklearn.")]:
+        del sys.modules[_k]
+    sys.modules.update(_saved_sklearn)
 
 hr("B2b · 文本短到聚不出主题时，仍必须降级而不是报错")
 clear()

@@ -44,7 +44,12 @@ def build_topic_chart(ds: Dataset, taxonomy: dict | None = None):
     segs = extract_segments(ds)
     if len(segs) < _MIN_SEG:
         return None
-    tags, _meta = tag_texts(segs, taxonomy)
+    try:
+        tags, _meta = tag_texts(segs, taxonomy)
+    except ImportError:
+        # 自动聚类走 sklearn（函数内延迟 import）。缺这个包时只该少一张主题图，
+        # 不该把整份报告带走 —— 报告链路本身还有降级那条路，缺包属于环境问题。
+        return None
     if not tags:
         return None
     cnt = Counter(tags)

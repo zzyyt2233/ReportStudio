@@ -15,7 +15,7 @@
 - Word 转 PDF 优先调用本机 LibreOffice，字体、页眉页脚、表格样式保留最完整；没装或转换失败时自动改用纯 Python 方案，界面上写明这次用的是哪种。没装 LibreOffice 时排版会简化一档。
 - 后端按功能域拆进 `core/routes` 下的六个模块，接口、用法和界面都不变；调用 LibreOffice 时临时建的配置目录用完就删，不在系统盘留下东西。
 - 示例数据在 clone 后生成一次即可：`python samples/make_samples.py`，产出 Excel、Word、PDF、图片、CSV、SQLite、Markdown 八份样例。
-- 降级报告的说明按实际情况写清：片段太少的短文本、没接模型时的扫描图片、或表里确实没有数值列这三种才会走降级。
+- 降级报告的说明按实际情况写清：片段太少的短文本、没接模型时的扫描图片、表里确实没有数值列、或裁掉了 scikit-learn 的长文本这四种才会走降级；缺 scikit-learn 时只是少一张主题分布图，报告照常出，不会报错。
 - 新增两个只读工具：`tools/list_dashboards.py` 列出已有看板各自用到哪些数据表，`tools/export_site.py` 把一个看板导成可发布的静态快照，默认取仓库自带的示例库，避免把真实业务数据发出去。
 
 ## 启动
